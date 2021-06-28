@@ -12,7 +12,7 @@ parser.add_argument('--batch_size', type=int, default=64,
                     help='Samples per batch')
 parser.add_argument('--num_epochs', type=int, default=15,
                     help='Number of training epochs for the policy gradient algorithm')
-parser.add_argument('--learning_rate', type=float, default=1.41e-4,
+parser.add_argument('--learning_rate', type=float, default=1.41e-7,
                     help='learning rate for the Bert classifier')
 parser.add_argument('--PG_lambda', type=float, default=0.01,
                     help='The hyperparameter controling the rewards due to bias and that due to miscalssification')
