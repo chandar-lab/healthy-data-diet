@@ -16,7 +16,7 @@ This process is illustrated in the sketch below:
 
 <div style="text-align: center">
 <img src="images/policy_gradient_pipeline.png" width="500">
-<p style="text-align: center;"> <b>Figure:</b> The pipeline used in of the policy gradient approach. </p>
+<p style="text-align: center;"> <b>Figure:</b> The pipeline used in the policy gradient approach. </p>
 </div>
 
 ## Installation
