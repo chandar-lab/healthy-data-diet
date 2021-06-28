@@ -1,8 +1,6 @@
 from pytorch_pretrained_bert import WEIGHTS_NAME, CONFIG_NAME
 from torch.optim import Adam
 import os
-from sklearn.metrics import confusion_matrix, classification_report
-from torch.utils.data import TensorDataset, DataLoader, Dataset
 import pandas as pd
 import numpy as np
 import torch.nn as nn
@@ -46,11 +44,11 @@ def training_epoch(epoch,args,optimizer,device,tokenizer,model,train_data,train_
         results_2=model.forward(input_ids=torch.tensor(df_batch_2_tokenized['input_ids']).to(device),attention_mask=torch.tensor(df_batch_2_tokenized['attention_mask']).to(device),token_type_ids=torch.tensor(df_batch_2_tokenized['token_type_ids']).to(device))[0]
         results_2=results_2.to(device)
   
-        reward_bias=-torch.norm(softmax(results_1)-softmax(results_2), dim=1)
+        reward_bias=-torch.norm(results_1-results_2, dim=1)
         reward_acc=(torch.argmax(results_1, axis=1)==torch.tensor(train_data["Class"].iloc[i*args.batch_size:(i+1)*args.batch_size].tolist()).to(device)).double()
         rewards_bias.append(torch.tensor(reward_bias).to(device))
         rewards_acc.append(torch.tensor(reward_acc).to(device))
-        rewards_total.append(torch.tensor(reward_bias+reward_acc).to(device))
+        rewards_total.append(torch.tensor(reward_bias+args.PG_lambda*reward_acc).to(device))
         accuracy.append(torch.sum(torch.argmax(results_1, axis=1)==torch.tensor(train_data["Class"].iloc[i*args.batch_size:(i+1)*args.batch_size].tolist()).to(device))/args.batch_size)
         print(accuracy)
         rewards = torch.cat(rewards_total).to(device)
@@ -85,7 +83,6 @@ def validation_epoch(epoch,args,device,tokenizer,model,validation_data,validatio
   
       for i in range(int(np.floor(len(validation_data)/args.batch_size))):
   
-          torch.cuda.empty_cache()
           logs = dict()
   
           rewards_acc = []
@@ -106,11 +103,11 @@ def validation_epoch(epoch,args,device,tokenizer,model,validation_data,validatio
           results_2=model.forward(input_ids=torch.tensor(df_batch_2_tokenized['input_ids']).to(device),attention_mask=torch.tensor(df_batch_2_tokenized['attention_mask']).to(device),token_type_ids=torch.tensor(df_batch_2_tokenized['token_type_ids']).to(device))[0]
           results_2=results_2.to(device)
   
-          reward_bias=-torch.norm(softmax(results_1)-softmax(results_2), dim=1)
+          reward_bias=-torch.norm(results_1-results_2, dim=1)
           reward_acc=(torch.argmax(results_1, axis=1)==torch.tensor(validation_data["Class"].iloc[i*args.batch_size:(i+1)*args.batch_size].tolist()).to(device)).double()
           rewards_bias.append(torch.tensor(reward_bias).to(device))
           rewards_acc.append(torch.tensor(reward_acc).to(device))
-          rewards_total.append(torch.tensor(reward_bias+reward_acc).to(device))
+          rewards_total.append(torch.tensor(reward_bias+args.PG_lambda*reward_acc).to(device))
           accuracy.append(torch.sum(torch.argmax(results_1, axis=1)==torch.tensor(validation_data["Class"].iloc[i*args.batch_size:(i+1)*args.batch_size].tolist()).to(device))/args.batch_size)
           print(accuracy)
           rewards = torch.cat(rewards_total).to(device)
@@ -139,6 +136,7 @@ def run_experiment(args):
     
     wandb.init(name='run_1', project='debiasing_sexism_detection_twitter_PG', config=args)
     model,tokenizer=train_classifier(args)
+    model=model.to(device)
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
 
     train_data = pd.read_csv('./data/'+args.dataset+'_train_original_gender.csv')
@@ -153,3 +151,5 @@ def run_experiment(args):
     for epoch in range(args.num_epochs):
       training_epoch(epoch,args,optimizer,device,tokenizer,model,train_data,train_data_2)
       validation_epoch(epoch,args,device,tokenizer,model,validation_data,validation_data_2)
+
+    return model,tokenizer
