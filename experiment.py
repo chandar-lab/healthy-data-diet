@@ -12,7 +12,20 @@ softmax=torch.nn.Softmax(dim=1).to(device)
 
 
 def training_epoch(epoch,args,optimizer,device,tokenizer,model,train_data,train_data_gender_swap):
-    
+    """
+    Apply policy gradient approach for 1 epoch of the trianing data.
+    args:
+        epoch: the current epoch
+        args: the arguments given by the user
+        optimizer: the optimizer used to minize the loss
+        device: the current device (cpu or gpu)
+        tokenizer: the tokenizer used before giving the sentences to the classifier
+        model: the pretrained classifier
+        train_data: the training data
+        train_data_gender_swap: the training data after swapping the genders (from male to female and vice versa)
+    returns:
+        loss (torch.tensor): the training epoch loss
+    """    
     logs = dict()
     model.train()
     compute_gradient = True
@@ -25,8 +38,23 @@ def training_epoch(epoch,args,optimizer,device,tokenizer,model,train_data,train_
     logs['epoch'] = epoch
     wandb.log(logs)
 
-def validation_epoch(epoch,args,optimizer,device,tokenizer,model,validation_data,validation_data_gender_swap):
+    return loss
 
+def validation_epoch(epoch,args,optimizer,device,tokenizer,model,validation_data,validation_data_gender_swap):
+    """
+    Apply policy gradient approach for 1 epoch of the validation data.
+    args:
+        epoch: the current epoch
+        args: the arguments given by the user
+        optimizer: the optimizer used to minize the loss
+        device: the current device (cpu or gpu)
+        tokenizer: the tokenizer used before giving the sentences to the classifier
+        model: the pretrained classifier
+        validation_data: the validation data
+        validation_data_gender_swap: the validation data after swapping the genders (from male to female and vice versa)
+    returns:
+        loss (torch.tensor): the validation epoch loss
+    """    
     logs = dict()
     model.eval()
     compute_gradient = False
@@ -39,9 +67,28 @@ def validation_epoch(epoch,args,optimizer,device,tokenizer,model,validation_data
       logs['validation_accuracy'] = epoch_accuracy.cpu().numpy()/(np.floor(len(validation_data)/args.batch_size))
       logs['epoch'] = epoch
       wandb.log(logs)  
+    
+    return loss
 
 def epoch_loss(epoch,args,optimizer,device,tokenizer,model,data,data_gender_swap,compute_gradient):
-
+      """
+      Apply policy gradient approach for 1 epoch of the validation data.
+      args:
+          epoch: the current epoch
+          args: the arguments given by the user
+          optimizer: the optimizer used to minize the loss
+          device: the current device (cpu or gpu)
+          tokenizer: the tokenizer used before giving the sentences to the classifier
+          model: the pretrained classifier
+          data: the training/validation data
+          data_gender_swap: the training/validation data after swapping the genders (from male to female and vice versa)
+          compute_gradient: a boolean that indicates whether or not we should compute the gradient of the loss
+      returns:
+          epoch_bias: the epoch average bias, which is the l2 norm of the difference between the logits of the model in 2 cases. The first case is when given the original sentence and the second is after swapping the gender in the sentences. The bias is averaged over the number of batches in the epoch.
+          epoch_accuracy: the epoch average accuracy
+          epoch_reward: the average epoch reward due to both accuracy and bias, which computed as (bias_reward + lambda * accuracy_reward)
+          loss: the  epoch loss
+      """   
       epoch_bias=torch.tensor(0.0).to(device)
       epoch_accuracy=torch.tensor(0.0).to(device)
       epoch_reward=torch.tensor(0.0).to(device)
@@ -96,10 +143,16 @@ def epoch_loss(epoch,args,optimizer,device,tokenizer,model,data,data_gender_swap
       return epoch_bias, epoch_accuracy, epoch_reward, loss
 
 def run_experiment(args):
-
-    # Define pretrained tokenizer and model
-    
+    """
+    Run the experiment by passing over the training and validation data to fine-tune the pretrained model
+    args:
+        args: the arguments given by the user
+    returns:
+        model: the model after updating its weights based on the policy gradient algorithm.
+        tokenizer: the tokenizer used before giving the sentences to the classifier
+    """      
     wandb.init(name="lambda = " + str(args.PG_lambda), project='debiasing_sexism_detection_twitter_PG', config=args)
+    #Define pretrained tokenizer and mode
     model,tokenizer=train_classifier(args)
     model=model.to(device)
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
@@ -110,7 +163,7 @@ def run_experiment(args):
     validation_data_gender_swap = pd.read_csv('./data/'+args.dataset+'_valid_gender_swap.csv')
         
     for epoch in range(args.num_epochs):
-      training_epoch(epoch,args,optimizer,device,tokenizer,model,train_data,train_data_gender_swap)
-      validation_epoch(epoch,args,optimizer,device,tokenizer,model,validation_data,validation_data_gender_swap)
+      training_loss=training_epoch(epoch,args,optimizer,device,tokenizer,model,train_data,train_data_gender_swap)
+      validation_loss=validation_epoch(epoch,args,optimizer,device,tokenizer,model,validation_data,validation_data_gender_swap)
 
     return model,tokenizer
