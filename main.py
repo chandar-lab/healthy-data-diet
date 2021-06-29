@@ -15,7 +15,7 @@ parser.add_argument('--num_epochs', type=int, default=15,
 parser.add_argument('--learning_rate', type=float, default=1.41e-7,
                     help='learning rate for the Bert classifier')
 parser.add_argument('--PG_lambda', type=float, default=0.01,
-                    help='The hyperparameter controling the rewards due to bias and that due to miscalssification')
+                    help='The hyperparameter controling the weight given to the reward due to bias and that due to miscalssification')
 #arguments for the classifier
 parser.add_argument('--classifier_model', choices=['bert-base-uncased'],
                     default='bert-base-uncased', help='Type of classifier used')
@@ -26,7 +26,9 @@ parser.add_argument('--num_epochs_classifier', type=int, default=1,
 parser.add_argument('--batch_size_classifier', type=int, default=32,
                     help='Batch size for the classifier')
 parser.add_argument('--load_pretrained_classifier', type=bool, default=False,
-                    help='Whether or load a pretrained classifier')
+                    help='Whether or not to load a pretrained classifier')
+parser.add_argument('--max_length', type=int, default=512,
+                    help='The maximum length of the sentences that we classify (in terms of the number of tokens)')
 
 def main(args):
     model,tokenizer=run_experiment(args)
