@@ -5,7 +5,7 @@ Reduce gender bias in machine learning models using reinforcement learning.
 We introduce a method that reduces the bias in classifiers using policy gradient algorithm. The method uses classifiers from 🤗 Hugging Face ([link](https://github.com/huggingface/transformers)). 
 
 ## How it works
-Reducing the bias in a sentiment analysis classifier using policy gradient approach is done as follows:
+Reducing the bias in a sentiment analysis classifier using policy gradient can be summarized as follows:
 
 1. **Training a vanilla classifier**: Train a classifier on sentiment analysis.
 2. **Fine-tuning**: starting with the trained model, we fine-tune the weights using policy gradient approach. The model gets 2 rewards, a binary reward whenever is correctly predicts the label, and a negative reward whenever it gives a different prediction after swapping the gender in the sentence.
