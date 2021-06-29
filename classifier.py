@@ -12,7 +12,22 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax=torch.nn.Softmax(dim=1).to(device)
 
 def measure_bias_metrics(model,tokenizer,args):
-
+    """
+    Compute metrics that measure the bias before and after applying our de-biasing algorithm. 
+    The metrics that we compute are the following:
+    1) Demagraphic parity
+    2) Equality of odds
+    3) Counterfactual token fairness
+    4) True negative rate
+    5) True positive rate
+    6) Equality of opportunity
+    args:
+        args: the arguments given by the user
+        model: the model after updating its weights based on the policy gradient algorithm.
+        tokenizer: the tokenizer used before giving the sentences to the classifier
+    returns:
+        the function doesnt return anything, since all the metrics are saved in txt files.
+    """      
     demographic_parity = {}
     CTF = {}
     # Load test data
@@ -217,9 +232,16 @@ def measure_bias_metrics(model,tokenizer,args):
 
     #===================================================#
 
-    
+# Some of the following parts are taken from https://towardsdatascience.com/fine-tuning-pretrained-nlp-models-with-huggingfaces-trainer-6326a4456e7b by Vincent Tan
 def train_classifier(args):
-
+      """
+      Train a classifier to be used as our starting point for polcy gradient. We can either train from scratch or load a pretrained model depending on the user's choice.
+      args:
+          args: the arguments given by the user
+      returns:
+          model: the model that is going to be our starting point for policy gradient
+          tokenizer: the tokenizer used before giving the sentences to the classifier model          
+      """    
       # Read data
       data = pd.read_csv('./data/'+args.dataset+'_train_original_gender.csv')
 
@@ -270,8 +292,6 @@ def train_classifier(args):
         
         # Train pre-trained model
         trainer.train()
-
-    
       return model, tokenizer
 
 def compute_metrics(p):
