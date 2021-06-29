@@ -22,13 +22,13 @@ This process is illustrated in the sketch below:
 ## Installation
 
 ### Python package
-Clone the repository, then install the required packages:
+Clone the repository, then install the required packages as follows:
 
 `pip -r install requirements.txt`
 
 ## Running the experiments
 
 ### Vanilla policy gradient
-To run the experiment, type:
+To run the experiment, simply type:
 
 `python main.py`
