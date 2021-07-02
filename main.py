@@ -18,7 +18,7 @@ parser.add_argument(
 parser.add_argument(
     "--learning_rate",
     type=float,
-    default=1.41e-7,
+    default=1.41e-6,
     help="learning rate for the Bert classifier",
 )
 parser.add_argument(
