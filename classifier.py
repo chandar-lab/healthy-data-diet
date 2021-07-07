@@ -320,7 +320,8 @@ def train_classifier(args):
         tokenizer: the tokenizer used before giving the sentences to the classifier model
     """
     # Read data
-    data = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
+    data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
+    data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
 
     if args.load_pretrained_classifier:
 
@@ -335,14 +336,15 @@ def train_classifier(args):
         model_name = args.classifier_model
         tokenizer = BertTokenizer.from_pretrained(model_name)
         model = BertForSequenceClassification.from_pretrained(
-            model_name, num_labels=len(data.Class.unique())
+            model_name, num_labels=len(data_train.Class.unique())
         )
 
         # ----- 1. Preprocess data -----#
         # Preprocess data
-        X = list(data[data.columns[1]])
-        y = list(data[data.columns[2]])
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
+        X_train = list(data_train[data_train.columns[1]])
+        y_train = list(data_train[data_train.columns[2]])
+        X_val = list(data_valid[data_valid.columns[1]])
+        y_val = list(data_valid[data_valid.columns[2]])
         X_train_tokenized = tokenizer(
             X_train, padding=True, truncation=True, max_length=args.max_length
         )
