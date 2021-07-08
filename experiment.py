@@ -287,7 +287,8 @@ def run_experiment(args):
         "./data/" + args.dataset + "_valid_gender_swap.csv"
     )
 
-    best_validation_reward = torch.tensor(-9999).to(device)
+    # initialize the best validation reward 
+    best_validation_reward = torch.tensor(-float('inf')).to(device)
     for epoch in range(args.num_epochs):
         training_loss = training_epoch(
             epoch,
