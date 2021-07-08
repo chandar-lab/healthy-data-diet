@@ -16,7 +16,15 @@ softmax = torch.nn.Softmax(dim=1).to(device)
 parser = argparse.ArgumentParser()
 
 def analyze_results(args):
-
+    """
+    Analyze the results to see the examples that were incorrectly classified and became correctly classified after
+    de-biasing, and vice versa. We follow the procedure in https://arxiv.org/pdf/2009.10795.pdf where the examples
+    are categorized into "easy-to-learn", "hard-to-learn" and "ambigous".
+    args:
+        args: the arguments given by the user
+    returns:
+        the function doesnt return anything, since all the output is written in a csv file.
+    """
     tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
     data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
     data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
@@ -57,11 +65,11 @@ def analyze_results(args):
     
     for i in range(args.num_epochs_classifier):
       if(i !=0):
+            # If this is not the first epoch, we load the model we saved from the previous epoch
             model_path = "./output/checkpoint-"+str(i*val_steps)   
             model = BertForSequenceClassification.from_pretrained(
                 model_path, num_labels=len(data_train.Class.unique()))
       else:
-            # Define pretrained tokenizer and model
             model_name = args.classifier_model
             model = BertForSequenceClassification.from_pretrained(
                 model_name, num_labels=len(data_train.Class.unique())
@@ -97,15 +105,35 @@ def analyze_results(args):
     
     y_pred = torch.argmax(prediction[-1], axis=1)
     ground_truth_labels = torch.tensor(list(test_data[label_column_name])).to(device)
+    
     prediction_all = torch.cat([torch.unsqueeze(prediction[i],dim=0) for i in range(len(prediction))])
-    # prediction_all = torch.cat([torch.tensor(i) for i in prediction]).to(device)
     prediction_mean = torch.mean(prediction_all, dim=0).to(device)
     prediction_deviation = torch.std(prediction_all, dim=0).to(device)
+
     confidence = torch.tensor([prediction_mean[i,int(ground_truth_labels[i])] for i in range(ground_truth_labels.shape[0])]).to(device)
     variability = torch.tensor([prediction_deviation[i,int(ground_truth_labels[i])] for i in range(ground_truth_labels.shape[0])]).to(device)
-    test_data['confidence'] = list(confidence)
-    test_data['variability'] = list(variability)
+
+    # ===================================================#
+
+    # Load the de-biased model to compare its performance to the biased one
+    prediction_after_debiasing = []
+    model_after_debiasing = BertForSequenceClassification.from_pretrained(
+        model_name, num_labels=len(data_train.Class.unique())
+    )
+    model_after_debiasing.load_state_dict(torch.load("./saved_models/"+args.classifier_model+'_debiased.pt',map_location=device)) 
+    # Define test trainer
+    test_trainer = Trainer(model_after_debiasing)
+    prediction_after_debiasing = softmax(torch.tensor(test_trainer.predict(test_dataset)[0]))    
+    y_pred_after_debiasing = torch.argmax(prediction_after_debiasing, axis=1)
+
+    # ===================================================#
+
+    # To analyze our results, we keep track of the confidence and variability in prediction of each example in the test data, as well as whether or not 
+    # it is correctly classified before and after de-biasing.
+    test_data['confidence'] = list(confidence.cpu().detach().numpy())
+    test_data['variability'] = list(variability.cpu().detach().numpy())
     test_data['Correct classification? before debiasing']=ground_truth_labels.cpu()==y_pred
+    test_data['Correct classification? after debiasing']=ground_truth_labels.cpu()==y_pred_after_debiasing
     test_data.to_csv('data_analysis.csv', index=False)
 
 # arguments for the classifier
