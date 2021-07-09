@@ -116,11 +116,16 @@ def validation_epoch(
         logs["epoch"] = epoch
         wandb.log(logs)
 
-        #if the developmenet accuracy is better than the bext developement reward, we save the model weights.
-        validation_reward_mean = epoch_reward.cpu().numpy() / (np.floor(len(validation_data) / args.batch_size))
+        # if the developmenet accuracy is better than the bext developement reward, we save the model weights.
+        validation_reward_mean = epoch_reward.cpu().numpy() / (
+            np.floor(len(validation_data) / args.batch_size)
+        )
         if validation_reward_mean > best_validation_reward:
-          best_validation_reward = validation_reward_mean
-          torch.save(model.state_dict(), "./saved_models/"+args.classifier_model+'_debiased.pt')
+            best_validation_reward = validation_reward_mean
+            torch.save(
+                model.state_dict(),
+                "./saved_models/" + args.classifier_model + "_debiased.pt",
+            )
 
     return loss, best_validation_reward
 
@@ -232,18 +237,18 @@ def epoch_loss(
         rewards_total.append(torch.tensor(reward_bias + args.PG_lambda * reward_acc))
 
         accuracy.append(
-                torch.argmax(results_original_gender, axis=1)
-                == torch.tensor(
-                    data[label_column_name]
-                    .iloc[i * args.batch_size : (i + 1) * args.batch_size]
-                    .tolist()
-                ).to(device)
+            torch.argmax(results_original_gender, axis=1)
+            == torch.tensor(
+                data[label_column_name]
+                .iloc[i * args.batch_size : (i + 1) * args.batch_size]
+                .tolist()
+            ).to(device)
         )
         rewards = torch.cat(rewards_total)
 
-        epoch_bias += torch.sum(torch.stack(rewards_bias))/args.batch_size
-        epoch_accuracy += torch.sum(torch.stack(accuracy))/args.batch_size
-        epoch_reward += torch.sum(rewards)/args.batch_size
+        epoch_bias += torch.sum(torch.stack(rewards_bias)) / args.batch_size
+        epoch_accuracy += torch.sum(torch.stack(accuracy)) / args.batch_size
+        epoch_reward += torch.sum(rewards) / args.batch_size
 
         #### Run the policy gradient algorithm
         loss = -torch.sum(
@@ -287,8 +292,7 @@ def run_experiment(args):
         "./data/" + args.dataset + "_valid_gender_swap.csv"
     )
 
-    # initialize the best validation reward 
-    best_validation_reward = torch.tensor(-float('inf')).to(device)
+    best_validation_reward = torch.tensor(-9999).to(device)
     for epoch in range(args.num_epochs):
         training_loss = training_epoch(
             epoch,
@@ -312,6 +316,11 @@ def run_experiment(args):
             validation_data_gender_swap,
         )
 
-    model.load_state_dict(torch.load("./saved_models/"+args.classifier_model+'_debiased.pt',map_location=device)) 
+    model.load_state_dict(
+        torch.load(
+            "./saved_models/" + args.classifier_model + "_debiased.pt",
+            map_location=device,
+        )
+    )
 
     return model, tokenizer
