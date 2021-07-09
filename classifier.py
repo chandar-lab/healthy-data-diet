@@ -56,6 +56,7 @@ def measure_bias_metrics(model, tokenizer, args):
         max_length=args.max_length,
     )
 
+
     # Create torch dataset
     test_dataset = Dataset(X_test_tokenized)
     # Define test trainer
