@@ -49,8 +49,6 @@ def analyze_results(args):
     val_steps = int(len(X_val) / args.batch_size_classifier)
 
     # Define Trainer parameters
-
-    # Define Trainer
     classifier_args = TrainingArguments(
         output_dir="saved_models",
         evaluation_strategy="steps",
@@ -81,6 +79,7 @@ def analyze_results(args):
                 num_labels=len(data_train.Class.unique()),
                 output_attentions=True,
             )
+        # Define Trainer    
         trainer = Trainer(
             model=model,
             args=classifier_args,
