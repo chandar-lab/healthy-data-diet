@@ -28,7 +28,17 @@ Clone the repository, then install the required packages as follows:
 
 ## Running the experiments
 
-### Vanilla policy gradient
-To run the experiment, simply type:
+To run the experiment with Vanilla policy gradient, simply type:
 
-`python main.py`
+`python main.py --num_epochs 30 --PG_lambda 0.5 `
+
+
+## Analyzing the results
+
+To be able to understand the results, we focus on:
+
+1. **Attention weights**: We log the top 5 tokens to which the classifiation token (CLS) attends before and after de-biasing.
+2. **Type of examples**: We follow the procedure in https://arxiv.org/pdf/2009.10795.pdf where the examples
+    are categorized into "easy-to-learn", "hard-to-learn" and "ambigous". The intuition is to know which category is mostly affected by the de-biasing algorithm.
+
+`python analyze_results.py --num_epochs_classifier 5 `
