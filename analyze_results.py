@@ -9,11 +9,12 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from classifier import Dataset, compute_metrics
 import argparse
+from argparse import ArgumentParser
+
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
-parser = argparse.ArgumentParser()
 
 
 def analyze_results(args):
@@ -50,7 +51,7 @@ def analyze_results(args):
 
     # Define Trainer parameters
     classifier_args = TrainingArguments(
-        output_dir="saved_models",
+        output_dir=args.output_dir,
         evaluation_strategy="steps",
         eval_steps=val_steps,
         save_steps=3000,
@@ -67,21 +68,21 @@ def analyze_results(args):
         if i != 0:
             # If this is not the first epoch, we load the model we saved from the previous epoch
             model_path = "./saved_models/checkpoint-" + str(i * val_steps)
-            model = BertForSequenceClassification.from_pretrained(
+            model_before_debiasing = BertForSequenceClassification.from_pretrained(
                 model_path,
                 num_labels=len(data_train.Class.unique()),
                 output_attentions=True,
             )
         else:
             model_name = args.classifier_model
-            model = BertForSequenceClassification.from_pretrained(
+            model_before_debiasing = BertForSequenceClassification.from_pretrained(
                 model_name,
                 num_labels=len(data_train.Class.unique()),
                 output_attentions=True,
             )
         # Define Trainer    
         trainer = Trainer(
-            model=model,
+            model=model_before_debiasing,
             args=classifier_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
@@ -89,10 +90,10 @@ def analyze_results(args):
             callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
         )
 
-        # Train pre-trained model
+        # Train pre-trained model for 1 epoch
         trainer.train()
         # Define test trainer
-        test_trainer = Trainer(model)
+        test_trainer = Trainer(model_before_debiasing)
 
         # Load test data
         test_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
@@ -105,7 +106,7 @@ def analyze_results(args):
 
         # Create torch dataset
         test_dataset = Dataset(X_test_tokenized)
-        # Make prediction
+        # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
         prediction.append(
             softmax(torch.tensor(test_trainer.predict(test_dataset)[0][0]))
         )
@@ -210,40 +211,48 @@ def analyze_results(args):
     )
     test_data.to_csv("./output/data_analysis.csv", index=False)
 
-
-# arguments for the classifier
-parser.add_argument(
-    "--classifier_model",
-    choices=["bert-base-uncased"],
-    default="bert-base-uncased",
-    help="Type of classifier used",
-)
-parser.add_argument(
-    "--dataset",
-    choices=["Equity-Evaluation-Corpus,twitter_dataset"],
-    default="twitter_dataset",
-    help="Type of dataset used",
-)
-parser.add_argument(
-    "--num_epochs_classifier",
-    type=int,
-    default=1,
-    help="Number of training epochs for the classifier",
-)
-parser.add_argument(
-    "--batch_size_classifier",
-    type=int,
-    default=32,
-    help="Batch size for the classifier",
-)
-parser.add_argument(
-    "--max_length",
-    type=int,
-    default=512,
-    help="The maximum length of the sentences that we classify (in terms of the number of tokens)",
-)
+def parse_args():
+    """ Parses the command line arguments. """
+    parser = ArgumentParser()
+    # arguments for the classifier
+    parser.add_argument(
+        "--classifier_model",
+        choices=["bert-base-uncased"],
+        default="bert-base-uncased",
+        help="Type of classifier used",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=["Equity-Evaluation-Corpus,twitter_dataset"],
+        default="twitter_dataset",
+        help="Type of dataset used",
+    )
+    parser.add_argument(
+        "--num_epochs_classifier",
+        type=int,
+        default=1,
+        help="Number of training epochs for the classifier",
+    )
+    parser.add_argument(
+        "--batch_size_classifier",
+        type=int,
+        default=32,
+        help="Batch size for the classifier",
+    )
+    parser.add_argument(
+        "--max_length",
+        type=int,
+        default=512,
+        help="The maximum length of the sentences that we classify (in terms of the number of tokens)",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="saved_models",
+        help="Directory to saved models",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    args = parser.parse_args()
+    args = parse_args()
     analyze_results(args)
