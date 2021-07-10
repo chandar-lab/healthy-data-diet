@@ -56,7 +56,6 @@ def measure_bias_metrics(model, tokenizer, args):
         max_length=args.max_length,
     )
 
-
     # Create torch dataset
     test_dataset = Dataset(X_test_tokenized)
     # Define test trainer
@@ -87,9 +86,8 @@ def measure_bias_metrics(model, tokenizer, args):
 
     # We also compute the same metric before reducing the bias
     # Load trained model
-    model_path = "./saved_models/checkpoint-500"
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
-        model_path, num_labels=number_of_labels, output_attentions=True
+        args.model_path, num_labels=number_of_labels, output_attentions=True
     )
 
     # Define test trainer
@@ -328,9 +326,8 @@ def train_classifier(args):
     if args.load_pretrained_classifier:
 
         tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
-        model_path = "./saved_models/checkpoint-500"
         model = BertForSequenceClassification.from_pretrained(
-            model_path, num_labels=len(data.Class.unique()), output_attentions=True
+            args.model_path, num_labels=len(data.Class.unique()), output_attentions=True
         )
 
     else:
@@ -363,7 +360,7 @@ def train_classifier(args):
 
         # Define Trainer
         classifier_args = TrainingArguments(
-            output_dir="saved_models",
+            output_dir=args.output_dir,
             evaluation_strategy="steps",
             eval_steps=500,
             save_steps=3000,
