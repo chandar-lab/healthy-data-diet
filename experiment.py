@@ -46,13 +46,13 @@ def training_epoch(
 
     #### Log everything
     logs["training_bias"] = -epoch_bias.cpu().numpy() / (
-        np.floor(len(train_data) / args.batch_size)
+        len(train_data) / args.batch_size
     )
     logs["training_reward_mean"] = epoch_reward.cpu().numpy() / (
-        np.floor(len(train_data) / args.batch_size)
+        len(train_data) / args.batch_size
     )
     logs["training_accuracy"] = epoch_accuracy.cpu().numpy() / (
-        np.floor(len(train_data) / args.batch_size)
+        len(train_data) / args.batch_size
     )
     logs["epoch"] = epoch
     wandb.log(logs)
@@ -67,6 +67,7 @@ def validation_epoch(
     device,
     tokenizer,
     model,
+    best_validation_reward,
     validation_data,
     validation_data_gender_swap,
 ):
@@ -79,6 +80,7 @@ def validation_epoch(
         device: the current device (cpu or gpu)
         tokenizer: the tokenizer used before giving the sentences to the classifier
         model: the pretrained classifier
+        best_validation_reward: the best validation reward that we use for model selection
         validation_data: the validation data
         validation_data_gender_swap: the validation data after swapping the genders (from male to female and vice versa)
     returns:
@@ -101,19 +103,31 @@ def validation_epoch(
             compute_gradient,
         )
         #### Log everything
+        ## Todo: check this division
         logs["validation_bias"] = -epoch_bias.cpu().numpy() / (
-            np.floor(len(validation_data) / args.batch_size)
+            len(validation_data) / args.batch_size
         )
         logs["validation_reward_mean"] = epoch_reward.cpu().numpy() / (
-            np.floor(len(validation_data) / args.batch_size)
+            len(validation_data) / args.batch_size
         )
         logs["validation_accuracy"] = epoch_accuracy.cpu().numpy() / (
-            np.floor(len(validation_data) / args.batch_size)
+            len(validation_data) / args.batch_size
         )
         logs["epoch"] = epoch
         wandb.log(logs)
 
-    return loss
+        # if the developmenet accuracy is better than the bext developement reward, we save the model weights.
+        validation_reward_mean = epoch_reward.cpu().numpy() / (
+            np.floor(len(validation_data) / args.batch_size)
+        )
+        if validation_reward_mean > best_validation_reward:
+            best_validation_reward = validation_reward_mean
+            torch.save(
+                model.state_dict(),
+                "./saved_models/" + args.classifier_model + "_debiased.pt",
+            )
+
+    return loss, best_validation_reward
 
 
 def epoch_loss(
@@ -157,12 +171,6 @@ def epoch_loss(
     for i in range(int(np.ceil(len(data) / args.batch_size))):
 
         rewards_acc, rewards_bias, rewards_total, accuracy = [], [], [], []
-
-        # the actual batch size is the same as args.batch_size unless it is the last batch becuase it will be smaller than that.
-        if i == int(np.floor(len(data) / args.batch_size)):
-            actual_batch_size = len(data) % args.batch_size
-        else:
-            actual_batch_size = args.batch_size
 
         #### get a batch from the dataset
         df_batch_original_gender = list(
@@ -229,22 +237,18 @@ def epoch_loss(
         rewards_total.append(torch.tensor(reward_bias + args.PG_lambda * reward_acc))
 
         accuracy.append(
-            torch.sum(
-                torch.argmax(results_original_gender, axis=1)
-                == torch.tensor(
-                    data[label_column_name]
-                    .iloc[i * args.batch_size : (i + 1) * args.batch_size]
-                    .tolist()
-                ).to(device)
-            )
-            / actual_batch_size
+            torch.argmax(results_original_gender, axis=1)
+            == torch.tensor(
+                data[label_column_name]
+                .iloc[i * args.batch_size : (i + 1) * args.batch_size]
+                .tolist()
+            ).to(device)
         )
-        print(accuracy)
         rewards = torch.cat(rewards_total)
 
-        epoch_bias += torch.mean(torch.stack(rewards_bias))
-        epoch_accuracy += torch.mean(torch.stack(accuracy))
-        epoch_reward += torch.mean(rewards)
+        epoch_bias += torch.sum(torch.stack(rewards_bias)) / args.batch_size
+        epoch_accuracy += torch.sum(torch.stack(accuracy)) / args.batch_size
+        epoch_reward += torch.sum(rewards) / args.batch_size
 
         #### Run the policy gradient algorithm
         loss = -torch.sum(
@@ -288,6 +292,7 @@ def run_experiment(args):
         "./data/" + args.dataset + "_valid_gender_swap.csv"
     )
 
+    best_validation_reward = torch.tensor(-9999).to(device)
     for epoch in range(args.num_epochs):
         training_loss = training_epoch(
             epoch,
@@ -299,15 +304,23 @@ def run_experiment(args):
             train_data,
             train_data_gender_swap,
         )
-        validation_loss = validation_epoch(
+        validation_loss, best_validation_reward = validation_epoch(
             epoch,
             args,
             optimizer,
             device,
             tokenizer,
             model,
+            best_validation_reward,
             validation_data,
             validation_data_gender_swap,
         )
+
+    model.load_state_dict(
+        torch.load(
+            "./saved_models/" + args.classifier_model + "_debiased.pt",
+            map_location=device,
+        )
+    )
 
     return model, tokenizer

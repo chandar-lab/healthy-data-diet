@@ -41,19 +41,20 @@ def measure_bias_metrics(model, tokenizer, args):
     X_test_tokenized = tokenizer(
         X_test, padding=True, truncation=True, max_length=args.max_length
     )
-    
+
     test_data_opposite_gender = pd.read_csv(
         "./data/" + args.dataset + "_valid_gender_swap.csv"
     )
     input_column_name_gender_swap = test_data_opposite_gender.columns[1]
-    X_test_opposite_gender = list(test_data_opposite_gender[input_column_name_gender_swap])
+    X_test_opposite_gender = list(
+        test_data_opposite_gender[input_column_name_gender_swap]
+    )
     X_test_tokenized_opposite_gender = tokenizer(
         X_test_opposite_gender,
         padding=True,
         truncation=True,
         max_length=args.max_length,
     )
-
 
     # Create torch dataset
     test_dataset = Dataset(X_test_tokenized)
@@ -62,7 +63,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred, _, _ = test_trainer.predict(test_dataset)
     # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred, axis=1)
+    y_pred = np.argmax(raw_pred[0], axis=1)
 
     # Load test data for the opposite gender
     # Create torch dataset
@@ -70,7 +71,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred_opposite_gender, _, _ = test_trainer.predict(test_dataset_opposite_gender)
     # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender, axis=1)
+    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
 
     demographic_parity["after_bias_reduction"] = 1 - torch.abs(
         torch.mean(torch.from_numpy(y_pred).double())
@@ -78,16 +79,15 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     CTF["after_bias_reduction"] = torch.mean(
         torch.abs(
-            softmax(torch.from_numpy(raw_pred))[:, 1]
-            - softmax(torch.from_numpy(raw_pred_opposite_gender))[:, 1]
+            softmax(torch.from_numpy(raw_pred[0]))[:, 1]
+            - softmax(torch.from_numpy(raw_pred_opposite_gender[0]))[:, 1]
         )
     )
 
     # We also compute the same metric before reducing the bias
     # Load trained model
-    model_path = "./output/checkpoint-500"
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
-        model_path, num_labels=number_of_labels
+        args.model_path, num_labels=number_of_labels, output_attentions=True
     )
 
     # Define test trainer
@@ -95,7 +95,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred, _, _ = test_trainer_before_bias_reduction.predict(test_dataset)
     # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred, axis=1)
+    y_pred = np.argmax(raw_pred[0], axis=1)
 
     # Load test data for the opposite gender
     # Create torch dataset
@@ -105,7 +105,7 @@ def measure_bias_metrics(model, tokenizer, args):
         test_dataset_opposite_gender
     )
     # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender, axis=1)
+    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
 
     demographic_parity["before_bias_reduction"] = 1 - torch.abs(
         torch.mean(torch.from_numpy(y_pred).double())
@@ -113,8 +113,8 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     CTF["before_bias_reduction"] = torch.mean(
         torch.abs(
-            softmax(torch.from_numpy(raw_pred))[:, 1]
-            - softmax(torch.from_numpy(raw_pred_opposite_gender))[:, 1]
+            softmax(torch.from_numpy(raw_pred[0]))[:, 1]
+            - softmax(torch.from_numpy(raw_pred_opposite_gender[0]))[:, 1]
         )
     )
 
@@ -162,7 +162,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred, _, _ = test_trainer.predict(test_dataset)
     # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred, axis=1)
+    y_pred = np.argmax(raw_pred[0], axis=1)
 
     # Load test data for the opposite gender
     # Create torch dataset
@@ -170,7 +170,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred_opposite_gender, _, _ = test_trainer.predict(test_dataset_opposite_gender)
     # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender, axis=1)
+    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
 
     equality_of_opportunity_y_equal_0["after_bias_reduction"] = 1 - torch.abs(
         torch.mean(torch.from_numpy(y_pred).double())
@@ -181,7 +181,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred, _, _ = test_trainer_before_bias_reduction.predict(test_dataset)
     # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred, axis=1)
+    y_pred = np.argmax(raw_pred[0], axis=1)
 
     # Load test data for the opposite gender
     # Create torch dataset
@@ -191,7 +191,7 @@ def measure_bias_metrics(model, tokenizer, args):
         test_dataset_opposite_gender
     )
     # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender, axis=1)
+    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
 
     equality_of_opportunity_y_equal_0["before_bias_reduction"] = 1 - torch.abs(
         torch.mean(torch.from_numpy(y_pred).double())
@@ -244,7 +244,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred, _, _ = test_trainer.predict(test_dataset)
     # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred, axis=1)
+    y_pred = np.argmax(raw_pred[0], axis=1)
 
     # Load test data for the opposite gender
     # Create torch dataset
@@ -252,7 +252,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred_opposite_gender, _, _ = test_trainer.predict(test_dataset_opposite_gender)
     # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender, axis=1)
+    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
 
     equality_of_opportunity_y_equal_1["after_bias_reduction"] = 1 - torch.abs(
         torch.mean(torch.from_numpy(y_pred).double())
@@ -263,7 +263,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Make prediction
     raw_pred, _, _ = test_trainer_before_bias_reduction.predict(test_dataset)
     # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred, axis=1)
+    y_pred = np.argmax(raw_pred[0], axis=1)
 
     # Load test data for the opposite gender
     # Create torch dataset
@@ -273,7 +273,7 @@ def measure_bias_metrics(model, tokenizer, args):
         test_dataset_opposite_gender
     )
     # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender, axis=1)
+    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
 
     equality_of_opportunity_y_equal_1["before_bias_reduction"] = 1 - torch.abs(
         torch.mean(torch.from_numpy(y_pred).double())
@@ -320,14 +320,14 @@ def train_classifier(args):
         tokenizer: the tokenizer used before giving the sentences to the classifier model
     """
     # Read data
-    data = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
+    data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
+    data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
 
     if args.load_pretrained_classifier:
 
         tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
-        model_path = "./output/checkpoint-500"
         model = BertForSequenceClassification.from_pretrained(
-            model_path, num_labels=len(data.Class.unique())
+            args.model_path, num_labels=len(data.Class.unique()), output_attentions=True
         )
 
     else:
@@ -335,14 +335,17 @@ def train_classifier(args):
         model_name = args.classifier_model
         tokenizer = BertTokenizer.from_pretrained(model_name)
         model = BertForSequenceClassification.from_pretrained(
-            model_name, num_labels=len(data.Class.unique())
+            model_name,
+            num_labels=len(data_train.Class.unique()),
+            output_attentions=True,
         )
 
         # ----- 1. Preprocess data -----#
         # Preprocess data
-        X = list(data[data.columns[1]])
-        y = list(data[data.columns[2]])
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
+        X_train = list(data_train[data_train.columns[1]])
+        y_train = list(data_train[data_train.columns[2]])
+        X_val = list(data_valid[data_valid.columns[1]])
+        y_val = list(data_valid[data_valid.columns[2]])
         X_train_tokenized = tokenizer(
             X_train, padding=True, truncation=True, max_length=args.max_length
         )
@@ -357,7 +360,7 @@ def train_classifier(args):
 
         # Define Trainer
         classifier_args = TrainingArguments(
-            output_dir="output",
+            output_dir=args.output_dir,
             evaluation_strategy="steps",
             eval_steps=500,
             save_steps=3000,
@@ -382,7 +385,7 @@ def train_classifier(args):
 
 def compute_metrics(p):
     pred, labels = p
-    pred = np.argmax(pred, axis=1)
+    pred = np.argmax(pred[0], axis=1)
 
     accuracy = accuracy_score(y_true=labels, y_pred=pred)
     recall = recall_score(y_true=labels, y_pred=pred, average="micro")
