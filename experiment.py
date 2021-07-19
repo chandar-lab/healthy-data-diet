@@ -321,8 +321,8 @@ def run_experiment(args):
         tokenizer: the tokenizer used before giving the sentences to the classifier
     """
     wandb.init(
-        name="lambda = " + str(args.lambda_PG),
-        project="debiasing_sexism_detection_twitter_PG",
+        name=str(args.dataset) + " using " + str(args.norm) + " distance",
+        project="reducing gender bias in " + str(args.dataset) + " using policy gradient",
         config=args,
     )
     # Define pretrained tokenizer and mode
