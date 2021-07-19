@@ -1,12 +1,10 @@
 from torch.optim import Adam
-import os
 import pandas as pd
 import numpy as np
-import torch.nn as nn
 import torch
-import pandas as pd
 from classifier import train_classifier
 import wandb
+import json
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
@@ -130,6 +128,50 @@ def validation_epoch(
     return loss, best_validation_reward
 
 
+def test_epoch(
+    epoch,
+    args,
+    optimizer,
+    device,
+    tokenizer,
+    model,
+    test_data,
+    test_data_gender_swap,
+):
+    """
+    Apply policy gradient approach for 1 epoch of the test data.
+    args:
+        epoch: the current epoch
+        args: the arguments given by the user
+        optimizer: the optimizer used to minize the loss
+        device: the current device (cpu or gpu)
+        tokenizer: the tokenizer used before giving the sentences to the classifier
+        model: the pretrained classifier
+        test: the test data
+        test: the test data after swapping the genders (from male to female and vice versa)
+    returns:
+        loss (torch.tensor): the test epoch loss
+    """
+    model.eval()
+    compute_gradient = False
+
+    with torch.no_grad():
+        epoch_bias, epoch_accuracy, epoch_reward, loss = epoch_loss(
+            epoch,
+            args,
+            optimizer,
+            device,
+            tokenizer,
+            model,
+            test_data,
+            test_data_gender_swap,
+            compute_gradient,
+        )
+
+
+    return loss, epoch_accuracy
+
+
 def epoch_loss(
     epoch,
     args,
@@ -220,9 +262,16 @@ def epoch_loss(
             ).to(device),
         )[0]
 
-        reward_bias = -torch.norm(
-            results_original_gender - results_gender_swap, dim=1
-        ).to(device)
+        if(args.norm=="l1"):
+          reward_bias = -torch.norm(
+              results_original_gender - results_gender_swap, dim=1, p=1
+          ).to(device)
+
+        elif(args.norm=="l2"):
+          reward_bias = -torch.norm(
+              results_original_gender - results_gender_swap, dim=1, p=2
+          ).to(device)
+
         reward_acc = (
             torch.argmax(results_original_gender, axis=1)
             == torch.tensor(
@@ -234,7 +283,7 @@ def epoch_loss(
 
         rewards_bias.append(torch.tensor(reward_bias))
         rewards_acc.append(torch.tensor(reward_acc))
-        rewards_total.append(torch.tensor(reward_bias + args.PG_lambda * reward_acc))
+        rewards_total.append(torch.tensor(reward_bias + args.lambda_PG * reward_acc))
 
         accuracy.append(
             torch.argmax(results_original_gender, axis=1)
@@ -272,14 +321,14 @@ def run_experiment(args):
         tokenizer: the tokenizer used before giving the sentences to the classifier
     """
     wandb.init(
-        name="lambda = " + str(args.PG_lambda),
+        name="lambda = " + str(args.lambda_PG),
         project="debiasing_sexism_detection_twitter_PG",
         config=args,
     )
     # Define pretrained tokenizer and mode
     model, tokenizer = train_classifier(args)
     model = model.to(device)
-    optimizer = Adam(model.parameters(), lr=args.learning_rate)
+    optimizer = Adam(model.parameters(), lr=args.learning_rate_PG)
 
     train_data = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
     train_data_gender_swap = pd.read_csv(
@@ -291,9 +340,16 @@ def run_experiment(args):
     validation_data_gender_swap = pd.read_csv(
         "./data/" + args.dataset + "_valid_gender_swap.csv"
     )
+    
+    test_data = pd.read_csv(
+        "./data/" + args.dataset + "_valid_original_gender.csv"
+    )
+    test_data_gender_swap = pd.read_csv(
+        "./data/" + args.dataset + "_valid_gender_swap.csv"
+    )    
 
-    best_validation_reward = torch.tensor(-9999).to(device)
-    for epoch in range(args.num_epochs):
+    best_validation_reward = torch.tensor(-float('inf')).to(device)
+    for epoch in range(args.num_epochs_PG):
         training_loss = training_epoch(
             epoch,
             args,
@@ -316,11 +372,35 @@ def run_experiment(args):
             validation_data_gender_swap,
         )
 
+    # Load the model that has the best performance on the validation data
     model.load_state_dict(
         torch.load(
             "./saved_models/" + args.classifier_model + "_debiased.pt",
             map_location=device,
         )
     )
+    
+    # Compute the test accuracy and loss using the model with the highest validation accuracy
+    test_loss, test_accuracy = test_epoch(
+        epoch,
+        args,
+        optimizer,
+        device,
+        tokenizer,
+        model,
+        test_data,
+        test_data_gender_swap,
+    )        
+    
+    # Divide the test accuracy over all the batches by the number of batches that we have
+    test_accuracy = test_accuracy / (
+        len(test_data) / args.batch_size
+    )    
+    
+    # Save the test accuracy
+    output_file = "./output/test_accuracy.json"
+    with open(output_file, "w+") as f:
+        json.dump(str(test_accuracy), f, indent=2)        
+
 
     return model, tokenizer
