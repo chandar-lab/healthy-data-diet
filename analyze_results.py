@@ -7,26 +7,31 @@ import os
 import json
 import numpy as np
 from sklearn.model_selection import train_test_split
-from classifier import Dataset, compute_metrics
+from classifier import Dataset, measure_performance_metrics
 import argparse
 from argparse import ArgumentParser
-
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
 
 
-def analyze_results(args):
+def compute_confidence_and_variability(args, data):
     """
-    Analyze the results by focusing on:
-    1) Attention weights: We log the top 5 tokens to which the classification token (CLS) attends before and after de-biasing.
-    2) Type of examples: We follow the procedure in https://arxiv.org/pdf/2009.10795.pdf where the examples
-        are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous". The intuition is to know which category is mostly affected by the de-biasing algorithm.
+    Compute the confidence and variability in the model as in https://arxiv.org/pdf/2009.10795.pdf as follows:
+    1) The model is trained for multple epochs, and after each epoch it is used to give predictions for a specific dataset (it could be training or validation).
+    2) The examples in the dataset are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous" based on the mean and standard deviation in the predictions of the ground truth labels.
+    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, while low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
     args:
         args: the arguments given by the user
+        data: the csv file of the dataset for which we compute the confidence and variability.
     returns:
-        the function doesnt return anything, since the output is written in a csv file.
+        the function returns:
+        confidence: the mean of the predictions that the model gives to the ground truth label, over multiple epochs.
+        variability: the standard deviation of the predictions that the model gives to the groud truth label, over multiple epochs.
+        test_trainer_before_debiasing:  used get the predictions of the model before_debiasing.
+        valid_dataset: the dataset for which we compute the confidence and variability.
+        tokenizer: the tokenizer used by the biased model
     """
     tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
     data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
@@ -80,39 +85,39 @@ def analyze_results(args):
                 num_labels=len(data_train.Class.unique()),
                 output_attentions=True,
             )
-        # Define Trainer    
+        # Define Trainer
         trainer = Trainer(
             model=model_before_debiasing,
             args=classifier_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
-            compute_metrics=compute_metrics,
+            compute_metrics=measure_performance_metrics,
             callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
         )
 
         # Train pre-trained model for 1 epoch
         trainer.train()
         # Define test trainer
-        test_trainer = Trainer(model_before_debiasing)
+        test_trainer_before_debiasing = Trainer(model_before_debiasing)
 
-        # Load test data
-        test_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-        input_column_name = test_data.columns[1]
-        label_column_name = test_data.columns[2]
-        X_test = list(test_data[input_column_name])
-        X_test_tokenized = tokenizer(
-            X_test, padding=True, truncation=True, max_length=args.max_length
+        input_column_name = data.columns[1]
+        label_column_name = data.columns[2]
+        X_valid = list(data[input_column_name])
+        X_valid_tokenized = tokenizer(
+            X_valid, padding=True, truncation=True, max_length=args.max_length
         )
 
         # Create torch dataset
-        test_dataset = Dataset(X_test_tokenized)
+        valid_dataset = Dataset(X_valid_tokenized)
         # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
         prediction.append(
-            softmax(torch.tensor(test_trainer.predict(test_dataset)[0][0]))
+            softmax(
+                torch.tensor(test_trainer_before_debiasing.predict(valid_dataset)[0][0])
+            )
         )
 
-    y_pred = torch.argmax(prediction[-1], axis=1)
-    ground_truth_labels = torch.tensor(list(test_data[label_column_name])).to(device)
+    y_pred_before_debiasing = torch.argmax(prediction[-1], axis=1)
+    ground_truth_labels = torch.tensor(list(data[label_column_name])).to(device)
 
     prediction_all = torch.cat(
         [torch.unsqueeze(prediction[i], dim=0) for i in range(len(prediction))]
@@ -133,19 +138,161 @@ def analyze_results(args):
         ]
     ).to(device)
 
+    return (
+        confidence,
+        variability,
+        test_trainer_before_debiasing,
+        valid_dataset,
+        tokenizer,
+    )
+
+
+def log_topk_attention_tokens(
+    args,
+    data,
+    test_trainer_before_debiasing,
+    test_trainer_after_debiasing,
+    valid_dataset,
+    tokenizer,
+):
+    """
+    Log the top k tokens to which the classification token (CLS) attends
+    args:
+        args: the arguments given by the user
+        data: the csv file of the dataset for which we compute the confidence and variability.
+        test_trainer_before_debiasing: the test trainer that is used to get the predictions of the model before debiasing
+        test_trainer_after_debiasing: the test trainer that is used to get the predictions of the model after debiasing
+        valid_dataset: the dataset for which we compute the top k attention tokens.
+    returns:
+        the function doesnt return anything, since the top k tokens are added to the csv file.
+    """
     # Compute the attention weights in the last layer of the biased model
-    top5_attention_tokens = []
-    test_ids = test_dataset[:]["input_ids"].to(device)
-    last_layer_attention = torch.tensor(
-        (test_trainer.predict(test_dataset)[0][-1][-1])
+    top_attention_tokens_biased = []
+    valid_ids = valid_dataset[:]["input_ids"].to(device)
+    last_layer_attention_before_debiasing = torch.tensor(
+        (test_trainer_before_debiasing.predict(valid_dataset)[0][-1][-1])
     ).to(device)
 
     # ===================================================#
 
-    # Load the de-biased model to compare its performance to the biased one
-    prediction_after_debiasing = []
+    # Log the top k tokens that the classification token attends to in the last layer of the biased and de-biased models for all the heads combined
+    number_of_heads = last_layer_attention_before_debiasing.shape[1]
+    top_attention_tokens_debiased = []
+    last_layer_attention_after_debiasing = torch.tensor(
+        (test_trainer_after_debiasing.predict(valid_dataset)[0][-1][-1])
+    ).to(device)
+
+    top_attention_tokens_biased.append(
+        [
+            [
+                tokenizer.convert_ids_to_tokens(valid_ids[j])[i]
+                for i in torch.topk(
+                    torch.sum(
+                        last_layer_attention_before_debiasing[j][0:number_of_heads],
+                        dim=0,
+                    )[0],
+                    args.num_tokens_logged,
+                )[1]
+            ]
+            for j in range(len(valid_dataset))
+        ]
+    )
+    top_attention_tokens_debiased.append(
+        [
+            [
+                tokenizer.convert_ids_to_tokens(valid_ids[j])[i]
+                for i in torch.topk(
+                    torch.sum(
+                        last_layer_attention_after_debiasing[j][0:number_of_heads],
+                        dim=0,
+                    )[0],
+                    args.num_tokens_logged,
+                )[1]
+            ]
+            for j in range(len(valid_dataset))
+        ]
+    )
+    data["top_attention_tokens_biased_" + "all_heads"] = top_attention_tokens_biased[0]
+    data[
+        "top_attention_tokens_de-biased_" + "all_heads"
+    ] = top_attention_tokens_debiased[0]
+    top_attention_tokens_debiased = []
+    top_attention_tokens_biased = []
+
+    # ===================================================#
+
+    # Log the top k tokens that the classification token attends to in the last layer of the biased and de-biased models for each attention head
+    if args.log_top_tokens_each_head == True:
+        for model_head in range(number_of_heads):
+            top_attention_tokens_biased.append(
+                [
+                    [
+                        tokenizer.convert_ids_to_tokens(valid_ids[j])[i]
+                        for i in torch.topk(
+                            last_layer_attention_before_debiasing[j][model_head][0],
+                            args.num_tokens_logged,
+                        )[1]
+                    ]
+                    for j in range(len(valid_dataset))
+                ]
+            )
+            top_attention_tokens_debiased.append(
+                [
+                    [
+                        tokenizer.convert_ids_to_tokens(valid_ids[j])[i]
+                        for i in torch.topk(
+                            last_layer_attention_after_debiasing[j][model_head][0],
+                            args.num_tokens_logged,
+                        )[1]
+                    ]
+                    for j in range(len(valid_dataset))
+                ]
+            )
+            data[
+                "top_attention_tokens_biased_" + "head_" + str(model_head)
+            ] = top_attention_tokens_biased[0]
+            data[
+                "top_attention_tokens_de-biased_" + "head_" + str(model_head)
+            ] = top_attention_tokens_debiased[0]
+
+    return data
+
+
+def analyze_results(args):
+    """
+    Analyze the results on the validation data by focusing on:
+    1) Attention weights: We log the top k tokens to which the classification token (CLS) attends before and after de-biasing.
+    2) Type of examples: We follow the procedure in https://arxiv.org/pdf/2009.10795.pdf where the examples
+        are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous". The intuition is to know which category is mostly affected by the de-biasing algorithm.
+    args:
+        args: the arguments given by the user
+    returns:
+        the function doesnt return anything, since the output is written in a csv file.
+    """
+    model_name = args.classifier_model
+    # Load the data that we need to analyze
+    data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
+    label_column_name = data.columns[2]
+    ground_truth_labels = torch.tensor(list(data[label_column_name])).to(device)
+    # Compute the confidence and variability as in https://arxiv.org/pdf/2009.10795.pdf
+    (
+        confidence,
+        variability,
+        test_trainer_before_debiasing,
+        valid_dataset,
+        tokenizer,
+    ) = compute_confidence_and_variability(args, data)
+    # Get te output of the model before debiasing
+    y_pred_before_debiasing = torch.argmax(
+        softmax(
+            torch.tensor(test_trainer_before_debiasing.predict(valid_dataset)[0][0])
+        ),
+        axis=1,
+    )
+
+    # Load the model after debiasing
     model_after_debiasing = BertForSequenceClassification.from_pretrained(
-        model_name, num_labels=len(data_train.Class.unique()), output_attentions=True
+        model_name, num_labels=len(data.Class.unique()), output_attentions=True
     )
     model_after_debiasing.load_state_dict(
         torch.load(
@@ -153,67 +300,56 @@ def analyze_results(args):
             map_location=device,
         )
     )
-    # Define test trainer
-    test_trainer = Trainer(model_after_debiasing)
+    # Define test trainer for the biased model
+    test_trainer_after_debiasing = Trainer(model_after_debiasing)
+
+    # Load the de-biased model to compare its performance to the biased one
+    prediction_after_debiasing = []
     prediction_after_debiasing = softmax(
-        torch.tensor(test_trainer.predict(test_dataset)[0][0])
+        torch.tensor(test_trainer_after_debiasing.predict(valid_dataset)[0][0])
     )
+    # Get te output of the model after debiasing
     y_pred_after_debiasing = torch.argmax(prediction_after_debiasing, axis=1)
 
-    # ===================================================#
-
-    # Log the top 5 tokens that the classification token attends to in the last layer of the biased and de-biased models
-    top5_attention_tokens_debiased = []
-    last_layer_attention_after_debiasing = torch.tensor(
-        (test_trainer.predict(test_dataset)[0][-1][-1])
-    ).to(device)
-    for model_head in range(last_layer_attention.shape[1]):
-        top5_attention_tokens.append(
-            [
-                [
-                    tokenizer.convert_ids_to_tokens(test_ids[j])[i]
-                    for i in torch.topk(last_layer_attention[j][model_head][0], 5)[1]
-                ]
-                for j in range(len(test_dataset))
-            ]
-        )
-        top5_attention_tokens_debiased.append(
-            [
-                [
-                    tokenizer.convert_ids_to_tokens(test_ids[j])[i]
-                    for i in torch.topk(
-                        last_layer_attention_after_debiasing[j][model_head][0], 5
-                    )[1]
-                ]
-                for j in range(len(test_dataset))
-            ]
-        )
-        test_data[
-            "top5_attention_tokens_biased_" + "head_" + str(model_head)
-        ] = top5_attention_tokens[0]
-        test_data[
-            "top5_attention_tokens_de-biased_" + "head_" + str(model_head)
-        ] = top5_attention_tokens_debiased[0]
-        top5_attention_tokens_debiased = []
-        top5_attention_tokens = []
-
-    # ===================================================#
-
-    # To analyze our results, we keep track of the confidence and variability in prediction of each example in the test data, as well as whether or not
-    # it is correctly classified before and after de-biasing.
-    test_data["confidence"] = list(confidence.cpu().detach().numpy())
-    test_data["variability"] = list(variability.cpu().detach().numpy())
-    test_data["Correct classification? before debiasing"] = (
-        ground_truth_labels.cpu() == y_pred
+    data = log_topk_attention_tokens(
+        args,
+        data,
+        test_trainer_before_debiasing,
+        test_trainer_after_debiasing,
+        valid_dataset,
+        tokenizer,
     )
-    test_data["Correct classification? after debiasing"] = (
+    # ===================================================#
+
+    # To analyze our results, we keep track of the confidence and variability in prediction of each example in the validation data, as well as whether or not
+    # it is correctly classified before and after de-biasing.
+    data["confidence"] = list(confidence.cpu().detach().numpy())
+    data["variability"] = list(variability.cpu().detach().numpy())
+    data["Correct classification? before debiasing"] = (
+        ground_truth_labels.cpu() == y_pred_before_debiasing
+    )
+    data["Correct classification? after debiasing"] = (
         ground_truth_labels.cpu() == y_pred_after_debiasing
     )
-    test_data.to_csv("./output/data_analysis.csv", index=False)
+    data.to_csv("./output/data_analysis.csv", index=False)
+
 
 def parse_args():
-    """ Parses the command line arguments. """
+    """Parses the command line arguments."""
     parser = ArgumentParser()
+    # arguments for analysing the data
+    parser.add_argument(
+        "--num_tokens_logged",
+        type=int,
+        default=5,
+        help="The value of k given that we log the top k tokens that the classification token attends to",
+    )
+    parser.add_argument(
+        "--log_top_tokens_each_head",
+        type=bool,
+        default=False,
+        help="Whether or not to log the top k tokens that the classification token attends to in the last layer for each attention head",
+    )
     # arguments for the classifier
     parser.add_argument(
         "--classifier_model",
