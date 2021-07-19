@@ -7,24 +7,30 @@ from argparse import ArgumentParser
 
 
 def parse_args():
-    """ Parses the command line arguments. """
+    """Parses the command line arguments."""
     parser = ArgumentParser()
     # arguments for the policy gradient algorithm
     parser.add_argument("--batch_size", type=int, default=64, help="Samples per batch")
     parser.add_argument(
-        "--num_epochs",
+        "--num_epochs_PG",
         type=int,
         default=15,
         help="Number of training epochs for the policy gradient algorithm",
     )
     parser.add_argument(
-        "--learning_rate",
+        "--learning_rate_PG",
         type=float,
         default=1.41e-6,
         help="learning rate for the Bert classifier",
     )
     parser.add_argument(
-        "--PG_lambda",
+        "--norm",
+        choices=["l1","l2"],
+        default="l2",
+        help="Type of distance used to compute the bias reward",
+    )       
+    parser.add_argument(
+        "--lambda_PG",
         type=float,
         default=0.01,
         help="The hyperparameter controling the weight given to the reward due to bias and that due to miscalssification",
@@ -35,10 +41,10 @@ def parse_args():
         choices=["bert-base-uncased"],
         default="bert-base-uncased",
         help="Type of classifier used",
-    )
+    ) 
     parser.add_argument(
         "--dataset",
-        choices=["Equity-Evaluation-Corpus,twitter_dataset"],
+        choices=["Equity-Evaluation-Corpus","twitter_dataset","HASOC_dataset"],
         default="twitter_dataset",
         help="Type of dataset used",
     )
@@ -63,7 +69,7 @@ def parse_args():
     parser.add_argument(
         "--max_length",
         type=int,
-        default=512,
+        default=40,
         help="The maximum length of the sentences that we classify (in terms of the number of tokens)",
     )
     parser.add_argument(
@@ -76,6 +82,7 @@ def parse_args():
         default="saved_models",
         help="Directory to saved models",
     )
+
     return parser.parse_args()
 
 
@@ -83,3 +90,4 @@ if __name__ == "__main__":
     args = parse_args()
     model, tokenizer = run_experiment(args)
     measure_bias_metrics(model, tokenizer, args)
+
