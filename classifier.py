@@ -424,12 +424,13 @@ def train_classifier(args):
     # Read data
     data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
     data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
+    val_steps = int(len(data_valid) / args.batch_size_classifier)
 
     if args.load_pretrained_classifier:
 
         tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
         model = BertForSequenceClassification.from_pretrained(
-            args.model_path, num_labels=len(data_train.Class.unique()), output_attentions=True
+            args.model_path+str(val_steps), num_labels=len(data_train.Class.unique()), output_attentions=True
         )
 
     else:
