@@ -74,7 +74,7 @@ def parse_args():
     )
     parser.add_argument(
         "--model_path",
-        default="./saved_models/checkpoint-500",
+        default="./saved_models/checkpoint-",
         help="Path to the saved Bert classifier",
     )
     parser.add_argument(
