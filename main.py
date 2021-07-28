@@ -24,16 +24,28 @@ def parse_args():
         help="learning rate for the Bert classifier",
     )
     parser.add_argument(
+        "--num_saved_debiased_models",
+        type=int,
+        default=3,
+        help="The number of debiased models that are saved throughout training",
+    )
+    parser.add_argument(
         "--norm",
-        choices=["l1","l2"],
+        choices=["l1", "l2"],
         default="l2",
         help="Type of distance used to compute the bias reward",
-    )       
+    )
     parser.add_argument(
         "--lambda_PG",
         type=float,
         default=0.01,
         help="The hyperparameter controling the weight given to the reward due to bias and that due to miscalssification",
+    )
+    parser.add_argument(
+        "--compute_majority_and_minority_accuracy",
+        type=bool,
+        default=False,
+        help="Whether or not to compute the test accuracy on the majority and minority groups of the test data",
     )
     # arguments for the classifier
     parser.add_argument(
@@ -41,10 +53,18 @@ def parse_args():
         choices=["bert-base-uncased"],
         default="bert-base-uncased",
         help="Type of classifier used",
-    ) 
+    )
     parser.add_argument(
         "--dataset",
-        choices=["Equity-Evaluation-Corpus","twitter_dataset","HASOC_dataset"],
+        choices=[
+            "Equity-Evaluation-Corpus",
+            "Twitter_sexism_dataset",
+            "HASOC_dataset",
+            "IMDB_dataset",
+            "kindle_dataset",
+            "Wikipedia_toxicity_dataset",
+            "Twitter_toxicity_dataset",
+        ],
         default="twitter_dataset",
         help="Type of dataset used",
     )
@@ -69,7 +89,7 @@ def parse_args():
     parser.add_argument(
         "--max_length",
         type=int,
-        default=40,
+        default=100,
         help="The maximum length of the sentences that we classify (in terms of the number of tokens)",
     )
     parser.add_argument(
@@ -90,4 +110,3 @@ if __name__ == "__main__":
     args = parse_args()
     model, tokenizer = run_experiment(args)
     measure_bias_metrics(model, tokenizer, args)
-
