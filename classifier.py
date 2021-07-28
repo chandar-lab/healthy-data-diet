@@ -22,7 +22,7 @@ def measure_bias_metrics(model, tokenizer, args):
     3) Counterfactual token fairness
     4) True negative rate
     5) True positive rate
-    6) Accuracy for both the original and opposite gender (each separately and combined) 
+    6) Accuracy for both the original and opposite gender (each separately and combined)
     7) Equality of opportunity
     args:
         args: the arguments given by the user
@@ -35,9 +35,10 @@ def measure_bias_metrics(model, tokenizer, args):
     CTF = {}
     # Load validation data
     valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-    input_column_name = valid_data.columns[1]
-    label_column_name = valid_data.columns[2]
-    number_of_labels = len(valid_data.Class.unique())
+
+    input_column_name = valid_data.columns[0]
+    label_column_name = valid_data.columns[1]
+    number_of_labels = len(valid_data[valid_data.columns[1]].unique())
     X_valid = list(valid_data[input_column_name])
     Y_valid = list(valid_data[label_column_name])
     X_valid_tokenized = tokenizer(
@@ -47,7 +48,8 @@ def measure_bias_metrics(model, tokenizer, args):
     valid_data_opposite_gender = pd.read_csv(
         "./data/" + args.dataset + "_valid_gender_swap.csv"
     )
-    input_column_name_gender_swap = valid_data_opposite_gender.columns[1]
+
+    input_column_name_gender_swap = valid_data_opposite_gender.columns[0]
     X_valid_opposite_gender = list(
         valid_data_opposite_gender[input_column_name_gender_swap]
     )
@@ -61,7 +63,13 @@ def measure_bias_metrics(model, tokenizer, args):
 
     # Create torch dataset
     valid_dataset = Dataset(X_valid_tokenized)
-    val_steps = int(len(X_valid) / args.batch_size_classifier)
+    checkpoint_steps = (
+        int(
+            len(pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv"))
+            / args.batch_size_classifier
+        )
+        * args.num_epochs_classifier
+    )
     # Define test trainer
     test_trainer = Trainer(model)
     # Make prediction
@@ -90,9 +98,7 @@ def measure_bias_metrics(model, tokenizer, args):
 
     # We also compute the same metric before reducing the bias
     # Load trained model
-    model_path = "./saved_models/checkpoint-" + str(
-        args.num_epochs_classifier * val_steps
-    )
+    model_path = "./saved_models/checkpoint-" + str(checkpoint_steps)
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
         model_path, num_labels=number_of_labels, output_attentions=True
     )
@@ -127,17 +133,17 @@ def measure_bias_metrics(model, tokenizer, args):
 
     output_file = "./output/demographic_parity.json"
     with open(output_file, "w+") as f:
-        json.dump(str(demographic_parity), f, indent=2)    
-        
+        json.dump(str(demographic_parity), f, indent=2)
+
     output_file = "./output/CTF.json"
     with open(output_file, "w+") as f:
-        json.dump(str(CTF), f, indent=2)        
+        json.dump(str(CTF), f, indent=2)
     # ===================================================#
 
     accuracy_original_gender = {}
     accuracy_opposite_gender = {}
     accuracy_overall = {}
-    
+
     # Load validation data
     valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
     X_valid = list(valid_data[input_column_name])
@@ -152,9 +158,7 @@ def measure_bias_metrics(model, tokenizer, args):
     X_valid_opposite_gender = list(
         valid_data_opposite_gender[input_column_name_gender_swap]
     )
-    Y_valid_opposite_gender =  list(
-        valid_data_opposite_gender[label_column_name]
-    )
+    Y_valid_opposite_gender = list(valid_data_opposite_gender[label_column_name])
     X_valid_tokenized_opposite_gender = tokenizer(
         X_valid_opposite_gender,
         padding=True,
@@ -164,7 +168,7 @@ def measure_bias_metrics(model, tokenizer, args):
 
     # Create torch dataset
     valid_dataset = Dataset(X_valid_tokenized)
-    
+
     # Define test trainer
     test_trainer = Trainer(model)
     # Make prediction
@@ -226,16 +230,16 @@ def measure_bias_metrics(model, tokenizer, args):
 
     output_file = "./output/accuracy_original_gender.json"
     with open(output_file, "w+") as f:
-        json.dump(str(accuracy_original_gender), f, indent=2)            
+        json.dump(str(accuracy_original_gender), f, indent=2)
 
     output_file = "./output/accuracy_opposite_gender.json"
     with open(output_file, "w+") as f:
-        json.dump(str(accuracy_opposite_gender), f, indent=2)            
+        json.dump(str(accuracy_opposite_gender), f, indent=2)
     # ===================================================#
 
     equality_of_opportunity_y_equal_0 = {}
     TNR = {}
-    
+
     # Load validation data
     valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
     valid_data_non_sexist_tweets = valid_data.loc[valid_data[label_column_name] == 0]
@@ -263,7 +267,7 @@ def measure_bias_metrics(model, tokenizer, args):
     # Create torch dataset
     valid_dataset = Dataset(X_valid_tokenized)
     # Define test trainer
-    
+
     test_trainer = Trainer(model)
     # Make prediction
     raw_pred, _, _ = test_trainer.predict(valid_dataset)
@@ -307,17 +311,17 @@ def measure_bias_metrics(model, tokenizer, args):
 
     output_file = "./output/equality_of_opportunity_y_equal_0.json"
     with open(output_file, "w+") as f:
-        json.dump(str(equality_of_opportunity_y_equal_0), f, indent=2)              
+        json.dump(str(equality_of_opportunity_y_equal_0), f, indent=2)
 
     output_file = "./output/TNR.json"
     with open(output_file, "w+") as f:
-        json.dump(str(TNR), f, indent=2)              
+        json.dump(str(TNR), f, indent=2)
 
     # ===================================================#
 
     equality_of_opportunity_y_equal_1 = {}
     TPR = {}
-    
+
     # Load validation data
     valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
     valid_data_sexist_tweets = valid_data.loc[valid_data[label_column_name] == 1]
@@ -344,7 +348,7 @@ def measure_bias_metrics(model, tokenizer, args):
 
     # Create torch dataset
     valid_dataset = Dataset(X_valid_tokenized)
-    
+
     # Define test trainer
     test_trainer = Trainer(model)
     # Make prediction
@@ -389,11 +393,11 @@ def measure_bias_metrics(model, tokenizer, args):
 
     output_file = "./output/equality_of_opportunity_y_equal_1.json"
     with open(output_file, "w+") as f:
-        json.dump(str(equality_of_opportunity_y_equal_1), f, indent=2)              
+        json.dump(str(equality_of_opportunity_y_equal_1), f, indent=2)
 
     output_file = "./output/TPR.json"
     with open(output_file, "w+") as f:
-        json.dump(str(TPR), f, indent=2)              
+        json.dump(str(TPR), f, indent=2)
     # ===================================================#
 
     equality_of_odds = {}
@@ -407,7 +411,7 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     output_file = "./output/equality_of_odds.json"
     with open(output_file, "w+") as f:
-        json.dump(str(equality_of_odds), f, indent=2)              
+        json.dump(str(equality_of_odds), f, indent=2)
     # ===================================================#
 
 
@@ -424,13 +428,18 @@ def train_classifier(args):
     # Read data
     data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
     data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-    val_steps = int(len(data_valid) / args.batch_size_classifier)
+    # The number of epochs afterwhich we save the model. We set it to this value to only save the last model.
+    checkpoint_steps = (
+        int(len(data_train) / args.batch_size_classifier) * args.num_epochs_classifier
+    )
 
     if args.load_pretrained_classifier:
 
         tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
         model = BertForSequenceClassification.from_pretrained(
-            args.model_path+str(val_steps), num_labels=len(data_train.Class.unique()), output_attentions=True
+            args.model_path + str(checkpoint_steps),
+            num_labels=len(data_train.Class.unique()),
+            output_attentions=True,
         )
 
     else:
@@ -439,16 +448,16 @@ def train_classifier(args):
         tokenizer = BertTokenizer.from_pretrained(model_name)
         model = BertForSequenceClassification.from_pretrained(
             model_name,
-            num_labels=len(data_train.Class.unique()),
+            num_labels=len(data_train[data_train.columns[1]].unique()),
             output_attentions=True,
         )
 
         # ----- 1. Preprocess data -----#
         # Preprocess data
-        X_train = list(data_train[data_train.columns[1]])
-        y_train = list(data_train[data_train.columns[2]])
-        X_val = list(data_valid[data_valid.columns[1]])
-        y_val = list(data_valid[data_valid.columns[2]])
+        X_train = list(data_train[data_train.columns[0]])
+        y_train = list(data_train[data_train.columns[1]])
+        X_val = list(data_valid[data_valid.columns[0]])
+        y_val = list(data_valid[data_valid.columns[1]])
         X_train_tokenized = tokenizer(
             X_train, padding=True, truncation=True, max_length=args.max_length
         )
@@ -458,7 +467,6 @@ def train_classifier(args):
 
         train_dataset = Dataset(X_train_tokenized, y_train)
         val_dataset = Dataset(X_val_tokenized, y_val)
-        val_steps = int(len(X_val) / args.batch_size_classifier)
 
         # Define Trainer parameters
 
@@ -466,8 +474,7 @@ def train_classifier(args):
         classifier_args = TrainingArguments(
             output_dir=args.output_dir,
             evaluation_strategy="steps",
-            eval_steps=val_steps,
-            save_steps=3000,
+            eval_steps=checkpoint_steps,
             per_device_train_batch_size=args.batch_size_classifier,
             per_device_eval_batch_size=args.batch_size_classifier,
             num_train_epochs=args.num_epochs_classifier,
@@ -513,4 +520,3 @@ class Dataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.encodings["input_ids"])
-
