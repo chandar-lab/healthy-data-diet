@@ -3,12 +3,7 @@ from transformers import TrainingArguments, Trainer
 from transformers import BertTokenizer, BertForSequenceClassification
 from transformers import EarlyStoppingCallback
 import torch
-import os
-import json
-import numpy as np
-from sklearn.model_selection import train_test_split
 from classifier import Dataset, measure_performance_metrics
-import argparse
 from argparse import ArgumentParser
 
 
@@ -16,9 +11,95 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
 
 
-def compute_confidence_and_variability(args, data):
+def compute_confidence_and_variability_after_debiasing(args, data):
     """
-    Compute the confidence and variability in the model as in https://arxiv.org/pdf/2009.10795.pdf as follows:
+    Compute the confidence and variability in the model after debiasing as in https://arxiv.org/pdf/2009.10795.pdf as follows:
+    1) The model is trained for multple epochs, and after each epoch it is used to give predictions for a specific dataset (it could be training or validation).
+    2) The examples in the dataset are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous" based on the mean and standard deviation in the predictions of the ground truth labels.
+    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, while low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
+    args:
+        args: the arguments given by the user
+        data: the csv file of the dataset for which we compute the confidence and variability.
+    returns:
+        the function returns:
+        confidence: the mean of the predictions that the debiased model gives to the ground truth label, over multiple epochs.
+        variability: the standard deviation of the predictions that the debiased model gives to the groud truth label, over multiple epochs.
+    """
+    tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
+    data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
+    data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
+
+    # ----- 1. Preprocess data -----#
+    # Preprocess data
+    X_val = list(data_valid[data_valid.columns[1]])
+    y_val = list(data_valid[data_valid.columns[2]])
+
+    X_val_tokenized = tokenizer(
+        X_val, padding=True, truncation=True, max_length=args.max_length
+    )
+
+    valid_dataset = Dataset(X_val_tokenized, y_val)
+
+    tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
+    prediction = []
+
+    model_after_debiasing = BertForSequenceClassification.from_pretrained(
+        args.classifier_model,
+        num_labels=len(data_train.Class.unique()),
+        output_attentions=True,
+    )
+
+    for i in range(args.num_saved_debiased_models):
+
+        model_after_debiasing.load_state_dict(
+            torch.load(
+                "./saved_models/"
+                + args.classifier_model
+                + "_debiased_epoch_"
+                + str(i)
+                + ".pt",
+                map_location=device,
+            )
+        )
+        # Define test trainer
+        test_trainer_after_debiasing = Trainer(model_after_debiasing)
+
+        # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
+        prediction.append(
+            softmax(
+                torch.tensor(test_trainer_after_debiasing.predict(valid_dataset)[0][0])
+            )
+        )
+    ground_truth_labels = torch.tensor(y_val).to(device)
+
+    prediction_all = torch.cat(
+        [torch.unsqueeze(prediction[i], dim=0) for i in range(len(prediction))]
+    )
+    prediction_mean = torch.mean(prediction_all, dim=0).to(device)
+    prediction_deviation = torch.std(prediction_all, dim=0).to(device)
+
+    confidence = torch.tensor(
+        [
+            prediction_mean[i, int(ground_truth_labels[i])]
+            for i in range(ground_truth_labels.shape[0])
+        ]
+    ).to(device)
+    variability = torch.tensor(
+        [
+            prediction_deviation[i, int(ground_truth_labels[i])]
+            for i in range(ground_truth_labels.shape[0])
+        ]
+    ).to(device)
+
+    return (
+        confidence,
+        variability,
+    )
+
+
+def compute_confidence_and_variability_before_debiasing(args, data):
+    """
+    Compute the confidence and variability in the model before debiasing as in https://arxiv.org/pdf/2009.10795.pdf as follows:
     1) The model is trained for multple epochs, and after each epoch it is used to give predictions for a specific dataset (it could be training or validation).
     2) The examples in the dataset are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous" based on the mean and standard deviation in the predictions of the ground truth labels.
     3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, while low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
@@ -51,14 +132,15 @@ def compute_confidence_and_variability(args, data):
     )
 
     train_dataset = Dataset(X_train_tokenized, y_train)
-    val_dataset = Dataset(X_val_tokenized, y_val)
-    val_steps = int(len(X_val) / args.batch_size_classifier)
+    valid_dataset = Dataset(X_val_tokenized, y_val)
+    # Save the model weights after each epoch
+    checkpoint_steps = int(len(data_train) / args.batch_size_classifier)
 
     # Define Trainer parameters
     classifier_args = TrainingArguments(
         output_dir=args.output_dir,
         evaluation_strategy="steps",
-        eval_steps=val_steps,
+        eval_steps=checkpoint_steps,
         save_steps=3000,
         per_device_train_batch_size=args.batch_size_classifier,
         per_device_eval_batch_size=args.batch_size_classifier,
@@ -72,7 +154,7 @@ def compute_confidence_and_variability(args, data):
     for i in range(args.num_epochs_classifier):
         if i != 0:
             # If this is not the first epoch, we load the model we saved from the previous epoch
-            model_path = "./saved_models/checkpoint-" + str(i * val_steps)
+            model_path = "./saved_models/checkpoint-" + str(checkpoint_steps * i)
             model_before_debiasing = BertForSequenceClassification.from_pretrained(
                 model_path,
                 num_labels=len(data_train.Class.unique()),
@@ -90,7 +172,7 @@ def compute_confidence_and_variability(args, data):
             model=model_before_debiasing,
             args=classifier_args,
             train_dataset=train_dataset,
-            eval_dataset=val_dataset,
+            eval_dataset=valid_dataset,
             compute_metrics=measure_performance_metrics,
             callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
         )
@@ -100,15 +182,6 @@ def compute_confidence_and_variability(args, data):
         # Define test trainer
         test_trainer_before_debiasing = Trainer(model_before_debiasing)
 
-        input_column_name = data.columns[1]
-        label_column_name = data.columns[2]
-        X_valid = list(data[input_column_name])
-        X_valid_tokenized = tokenizer(
-            X_valid, padding=True, truncation=True, max_length=args.max_length
-        )
-
-        # Create torch dataset
-        valid_dataset = Dataset(X_valid_tokenized)
         # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
         prediction.append(
             softmax(
@@ -116,8 +189,7 @@ def compute_confidence_and_variability(args, data):
             )
         )
 
-    y_pred_before_debiasing = torch.argmax(prediction[-1], axis=1)
-    ground_truth_labels = torch.tensor(list(data[label_column_name])).to(device)
+    ground_truth_labels = torch.tensor(y_val).to(device)
 
     prediction_all = torch.cat(
         [torch.unsqueeze(prediction[i], dim=0) for i in range(len(prediction))]
@@ -276,12 +348,18 @@ def analyze_results(args):
     ground_truth_labels = torch.tensor(list(data[label_column_name])).to(device)
     # Compute the confidence and variability as in https://arxiv.org/pdf/2009.10795.pdf
     (
-        confidence,
-        variability,
+        confidence_before_debiasing,
+        variability_before_debiasing,
         test_trainer_before_debiasing,
         valid_dataset,
         tokenizer,
-    ) = compute_confidence_and_variability(args, data)
+    ) = compute_confidence_and_variability_before_debiasing(args, data)
+
+    (
+        confidence_after_debiasing,
+        variability_after_debiasing,
+    ) = compute_confidence_and_variability_after_debiasing(args, data)
+
     # Get te output of the model before debiasing
     y_pred_before_debiasing = torch.argmax(
         softmax(
@@ -296,7 +374,7 @@ def analyze_results(args):
     )
     model_after_debiasing.load_state_dict(
         torch.load(
-            "./saved_models/" + args.classifier_model + "_debiased.pt",
+            "./saved_models/" + args.classifier_model + "_debiased_best.pt",
             map_location=device,
         )
     )
@@ -323,8 +401,18 @@ def analyze_results(args):
 
     # To analyze our results, we keep track of the confidence and variability in prediction of each example in the validation data, as well as whether or not
     # it is correctly classified before and after de-biasing.
-    data["confidence"] = list(confidence.cpu().detach().numpy())
-    data["variability"] = list(variability.cpu().detach().numpy())
+    data["confidence_before_debiasing"] = list(
+        confidence_before_debiasing.cpu().detach().numpy()
+    )
+    data["variability_before_debiasing"] = list(
+        variability_before_debiasing.cpu().detach().numpy()
+    )
+    data["confidence_after_debiasing"] = list(
+        confidence_after_debiasing.cpu().detach().numpy()
+    )
+    data["variability_after_debiasing"] = list(
+        variability_after_debiasing.cpu().detach().numpy()
+    )
     data["Correct classification? before debiasing"] = (
         ground_truth_labels.cpu() == y_pred_before_debiasing
     )
@@ -343,6 +431,12 @@ def parse_args():
         type=int,
         default=5,
         help="The value of k given that we log the top k tokens that the classification token attends to",
+    )
+    parser.add_argument(
+        "--num_saved_debiased_models",
+        type=int,
+        default=3,
+        help="The number of debiased models that are saved throughout training",
     )
     parser.add_argument(
         "--log_top_tokens_each_head",
