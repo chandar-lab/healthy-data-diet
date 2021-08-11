@@ -12,7 +12,13 @@ softmax = torch.nn.Softmax(dim=1).to(device)
 
 
 def training_epoch(
-    epoch, args, optimizer, device, tokenizer, model, train_dataset,
+    epoch,
+    args,
+    optimizer,
+    device,
+    tokenizer,
+    model,
+    train_dataset,
 ):
     """
     Apply policy gradient approach for 1 epoch of the trianing data.
@@ -46,7 +52,7 @@ def training_epoch(
     logs["training_bias"] = epoch_bias.cpu().numpy() / (
         train_dataset.__len__() / args.batch_size
     )
-    if(args.approach=="policy_gradient"):
+    if args.approach == "policy_gradient":
         # We only log the reward if we are doing policy gradient
         logs["training_reward_mean"] = epoch_reward.cpu().numpy() / (
             train_dataset.__len__() / args.batch_size
@@ -54,7 +60,7 @@ def training_epoch(
     logs["training_accuracy"] = epoch_accuracy.cpu().numpy() / (
         train_dataset.__len__() / args.batch_size
     )
-    logs["epoch"] = epoch +1
+    logs["epoch"] = epoch + 1
     wandb.log(logs)
 
     return loss, model
@@ -102,22 +108,22 @@ def validation_epoch(
         )
 
         # We divide by this factor to make sure that the values averaged average over the whole epoch.
-        epoch_accuracy /= (np.floor(val_dataset.__len__() / args.batch_size)) 
-        epoch_bias /= (np.floor(val_dataset.__len__() / args.batch_size)) 
-        epoch_reward /= (np.floor(val_dataset.__len__() / args.batch_size)) 
+        epoch_accuracy /= np.floor(val_dataset.__len__() / args.batch_size)
+        epoch_bias /= np.floor(val_dataset.__len__() / args.batch_size)
+        epoch_reward /= np.floor(val_dataset.__len__() / args.batch_size)
         #### Log everything
         logs["validation_bias"] = epoch_bias.cpu().numpy()
-        if(args.approach=="policy_gradient"):
+        if args.approach == "policy_gradient":
             # We only log the reward if we are doing policy gradient
-            logs["validation_reward_mean"] = epoch_reward.cpu().numpy() 
-        logs["validation_accuracy"] = epoch_accuracy.cpu().numpy() 
+            logs["validation_reward_mean"] = epoch_reward.cpu().numpy()
+        logs["validation_accuracy"] = epoch_accuracy.cpu().numpy()
         # We add 1 because python starts with 0 instead of 1
         logs["epoch"] = epoch + 1
         wandb.log(logs)
- 
-        # if the developmenet accuracy is better than the best developement reward, we save the model weights. 
-        if (epoch_accuracy - epoch_bias)> best_validation_reward:
-            print(epoch+1)
+
+        # if the developmenet accuracy is better than the best developement reward, we save the model weights.
+        if (epoch_accuracy - epoch_bias) > best_validation_reward:
+            print(epoch + 1)
             print(epoch_accuracy, epoch_bias)
             best_validation_reward = epoch_accuracy - epoch_bias
             torch.save(
@@ -201,127 +207,162 @@ def epoch_loss(
     epoch_accuracy = torch.tensor(0.0).to(device)
     epoch_reward = torch.tensor(0.0).to(device)
     criterion = nn.CrossEntropyLoss()
-    
 
     for i in range(int(np.ceil(dataset.__len__() / args.batch_size))):
 
         results_original_gender = model.forward(
-            input_ids=torch.tensor(dataset.encodings["input_ids"][i*args.batch_size : (i + 1) * args.batch_size]).to(
-                device
-            ),    
+            input_ids=torch.tensor(
+                dataset.encodings["input_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
             attention_mask=torch.tensor(
-                dataset.encodings["attention_mask"][i*args.batch_size : (i + 1) * args.batch_size]
+                dataset.encodings["attention_mask"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
             ).to(device),
             token_type_ids=torch.tensor(
-                dataset.encodings["token_type_ids"][i*args.batch_size : (i + 1) * args.batch_size]
-            ).to(device)
+                dataset.encodings["token_type_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
         )[0]
         results_gender_swap = model.forward(
-            input_ids=torch.tensor(dataset.encodings_gender_swap["input_ids"][i*args.batch_size : (i + 1) * args.batch_size]).to(
-                device
-            ),    
+            input_ids=torch.tensor(
+                dataset.encodings_gender_swap["input_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
             attention_mask=torch.tensor(
-                dataset.encodings_gender_swap["attention_mask"][i*args.batch_size : (i + 1) * args.batch_size]
+                dataset.encodings_gender_swap["attention_mask"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
             ).to(device),
             token_type_ids=torch.tensor(
-                dataset.encodings_gender_swap["token_type_ids"][i*args.batch_size : (i + 1) * args.batch_size]
-            ).to(device)
+                dataset.encodings_gender_swap["token_type_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
         )[0]
         results_pharaphrasing = model.forward(
-            input_ids=torch.tensor(dataset.encodings_paraphrasing["input_ids"][i*args.batch_size : (i + 1) * args.batch_size]).to(
-                device
-            ),    
+            input_ids=torch.tensor(
+                dataset.encodings_paraphrasing["input_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
             attention_mask=torch.tensor(
-                dataset.encodings_paraphrasing["attention_mask"][i*args.batch_size : (i + 1) * args.batch_size]
+                dataset.encodings_paraphrasing["attention_mask"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
             ).to(device),
             token_type_ids=torch.tensor(
-                dataset.encodings_paraphrasing["token_type_ids"][i*args.batch_size : (i + 1) * args.batch_size]
-            ).to(device)
-        )[0]        
-        
-        if(args.approach == "policy_gradient"):
+                dataset.encodings_paraphrasing["token_type_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+        )[0]
+
+        if args.approach == "policy_gradient":
             rewards_acc, rewards_bias, rewards_total = [], [], []
-    
-    
-            if len(dataset.encodings["input_ids"]) == len(dataset.encodings_gender_swap["input_ids"]):
+
+            if len(dataset.encodings["input_ids"]) == len(
+                dataset.encodings_gender_swap["input_ids"]
+            ):
                 # We can only compute the bias if the number of examples in data and data_gender_swap is the same
                 if args.norm == "l1":
-                    reward_bias = - args.lambda_gender * torch.norm(
+                    reward_bias = -args.lambda_gender * torch.norm(
                         results_original_gender - results_gender_swap, dim=1, p=1
                     ).to(device) - args.lambda_data * torch.norm(
                         results_original_gender - results_pharaphrasing, dim=1, p=1
-                    ).to(device)
-    
+                    ).to(
+                        device
+                    )
+
                 elif args.norm == "l2":
-                    reward_bias = - args.lambda_gender * torch.norm(
+                    reward_bias = -args.lambda_gender * torch.norm(
                         results_original_gender - results_gender_swap, dim=1, p=2
-                    ).to(device) -args.lambda_data * torch.norm(
+                    ).to(device) - args.lambda_data * torch.norm(
                         results_original_gender - results_pharaphrasing, dim=1, p=2
-                    ).to(device)
-    
+                    ).to(
+                        device
+                    )
+
             else:
                 # If the nummber of examples in data and data_gender_swap is different, we set the bias to an arbitrary value of -1, meaning that we cant compute the bias.
                 reward_bias = torch.tensor(-1).to(device)
-    
+
             rewards_bias.append(torch.tensor(reward_bias))
-    
+
             reward_acc = (
                 torch.argmax(results_original_gender, axis=1)
-                == torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]).to(device)
+                == torch.tensor(
+                    dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]
+                ).to(device)
             ).double()
-    
+
             rewards_total.append(torch.tensor(reward_bias + reward_acc))
-    
+
             rewards_acc.append(reward_acc)
             rewards = torch.cat(rewards_total)
-    
+
             epoch_bias -= torch.sum(torch.stack(rewards_bias)) / args.batch_size
             epoch_accuracy += torch.sum(torch.stack(rewards_acc)) / args.batch_size
             epoch_reward += torch.sum(rewards) / args.batch_size
-    
+
             #### Run the policy gradient algorithm
             loss = -torch.sum(
-                torch.log(torch.max(softmax(results_original_gender), axis=1)[0]) * rewards
+                torch.log(torch.max(softmax(results_original_gender), axis=1)[0])
+                * rewards
             )
-            
-        elif(args.approach == "supervised_learning"):
-            
+
+        elif args.approach == "supervised_learning":
+
             batch_accuracy, batch_bias = [], []
 
             accuracy = (
                 torch.argmax(results_original_gender, axis=1)
-                == torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]).to(device)
+                == torch.tensor(
+                    dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]
+                ).to(device)
             ).double()
-        
+
             batch_accuracy.append(accuracy)
 
-            
-            if len(dataset.encodings["input_ids"]) == len(dataset.encodings_gender_swap["input_ids"]):
+            if len(dataset.encodings["input_ids"]) == len(
+                dataset.encodings_gender_swap["input_ids"]
+            ):
                 # We can only compute the bias if the number of examples in data and data_gender_swap is the same
                 if args.norm == "l1":
                     bias = torch.norm(
                         results_original_gender - results_gender_swap, dim=1, p=1
                     ).to(device)
-    
+
                 elif args.norm == "l2":
                     bias = torch.norm(
                         results_original_gender - results_gender_swap, dim=1, p=2
                     ).to(device)
-    
+
             else:
                 # If the nummber of examples in data and data_gender_swap is different, we set the bias to an arbitrary value of -1, meaning that we cant compute the bias.
-                bias = torch.tensor(-1).to(device)            
-        
+                bias = torch.tensor(-1).to(device)
+
             batch_bias.append(torch.tensor(bias))
-            
+
             epoch_bias += torch.sum(torch.stack(batch_bias)) / args.batch_size
             epoch_accuracy += torch.sum(torch.stack(batch_accuracy)) / args.batch_size
-            
+
             output_dim = results_original_gender.shape[1]
-            trg = torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]).to(device)
-            loss = criterion(results_original_gender.contiguous().view(-1, output_dim), trg.contiguous().view(-1)) + torch.mean(bias).item()             
-        
-        
+            trg = torch.tensor(
+                dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]
+            ).to(device)
+            loss = (
+                criterion(
+                    results_original_gender.contiguous().view(-1, output_dim),
+                    trg.contiguous().view(-1),
+                )
+                + torch.mean(bias).item()
+            )
+
         if compute_gradient == True:
             optimizer.zero_grad()
             loss.backward()
@@ -354,7 +395,6 @@ def run_experiment(args):
     model = model.to(device)
     optimizer = Adam(model.parameters(), lr=args.learning_rate_PG)
 
-    
     # Load the dataset
     train_dataset, val_dataset, test_dataset = data_loader(args)
 
@@ -420,8 +460,8 @@ def run_experiment(args):
         # Compute the test accuracy on the majority and majority groups of the test data.
         # The majority groups refers to the set of examples where relying on the unintended correlation improves the performance, whereas the minority group represents the set of exmaples where relying on unintended correlation hurts the performance.
         # Load the dataset
-        _, _, test_dataset_majority = data_loader(args,test_subset="majority")
-        _, _, test_dataset_minority = data_loader(args,test_subset="minority")
+        _, _, test_dataset_majority = data_loader(args, test_subset="majority")
+        _, _, test_dataset_minority = data_loader(args, test_subset="minority")
         _, test_accuracy_majority, model = test_epoch(
             epoch,
             args,
