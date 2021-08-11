@@ -123,8 +123,6 @@ def validation_epoch(
 
         # if the developmenet accuracy is better than the best developement reward, we save the model weights.
         if (epoch_accuracy - epoch_bias) > best_validation_reward:
-            print(epoch + 1)
-            print(epoch_accuracy, epoch_bias)
             best_validation_reward = epoch_accuracy - epoch_bias
             torch.save(
                 model.state_dict(),
