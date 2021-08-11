@@ -8,6 +8,7 @@ import json
 import numpy as np
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
 from sklearn.model_selection import train_test_split
+from models.data_loader import data_loader
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
@@ -131,11 +132,11 @@ def measure_bias_metrics(model, tokenizer, args):
         )
     )
 
-    output_file = "./output/demographic_parity.json"
+    output_file = "./output/demographic_parity_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(demographic_parity), f, indent=2)
 
-    output_file = "./output/CTF.json"
+    output_file = "./output/CTF_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(CTF), f, indent=2)
     # ===================================================#
@@ -223,16 +224,16 @@ def measure_bias_metrics(model, tokenizer, args):
         accuracy_original_gender["before_bias_reduction"]
         + accuracy_opposite_gender["before_bias_reduction"]
     )
-    output_file = "./output/accuracy_overall.json"
-    f = open(output_file, "w")
-    f.write(str(accuracy_overall))
-    f.close()
 
-    output_file = "./output/accuracy_original_gender.json"
+    output_file = "./output/accuracy_overall_"+args.method+".json"
+    with open(output_file, "w+") as f:
+        json.dump(str(accuracy_overall), f, indent=2)
+
+    output_file = "./output/accuracy_original_gender_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_original_gender), f, indent=2)
 
-    output_file = "./output/accuracy_opposite_gender.json"
+    output_file = "./output/accuracy_opposite_gender_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_opposite_gender), f, indent=2)
     # ===================================================#
@@ -309,11 +310,11 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     TNR["before_bias_reduction"] = 1 - torch.mean(torch.from_numpy(y_pred).double())
 
-    output_file = "./output/equality_of_opportunity_y_equal_0.json"
+    output_file = "./output/equality_of_opportunity_y_equal_0_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_opportunity_y_equal_0), f, indent=2)
 
-    output_file = "./output/TNR.json"
+    output_file = "./output/TNR_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(TNR), f, indent=2)
 
@@ -391,11 +392,11 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     TPR["before_bias_reduction"] = torch.mean(torch.from_numpy(y_pred).double())
 
-    output_file = "./output/equality_of_opportunity_y_equal_1.json"
+    output_file = "./output/equality_of_opportunity_y_equal_1_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_opportunity_y_equal_1), f, indent=2)
 
-    output_file = "./output/TPR.json"
+    output_file = "./output/TPR_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(TPR), f, indent=2)
     # ===================================================#
@@ -409,7 +410,7 @@ def measure_bias_metrics(model, tokenizer, args):
         equality_of_opportunity_y_equal_0["before_bias_reduction"]
         + equality_of_opportunity_y_equal_1["before_bias_reduction"]
     )
-    output_file = "./output/equality_of_odds.json"
+    output_file = "./output/equality_of_odds_"+args.method+".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_odds), f, indent=2)
     # ===================================================#
@@ -452,21 +453,8 @@ def train_classifier(args):
             output_attentions=True,
         )
 
-        # ----- 1. Preprocess data -----#
-        # Preprocess data
-        X_train = list(data_train[data_train.columns[0]])
-        y_train = list(data_train[data_train.columns[1]])
-        X_val = list(data_valid[data_valid.columns[0]])
-        y_val = list(data_valid[data_valid.columns[1]])
-        X_train_tokenized = tokenizer(
-            X_train, padding=True, truncation=True, max_length=args.max_length
-        )
-        X_val_tokenized = tokenizer(
-            X_val, padding=True, truncation=True, max_length=args.max_length
-        )
-
-        train_dataset = Dataset(X_train_tokenized, y_train)
-        val_dataset = Dataset(X_val_tokenized, y_val)
+        # Load the dataset
+        train_dataset, val_dataset, test_dataset = data_loader(args)
 
         # Define Trainer parameters
 
