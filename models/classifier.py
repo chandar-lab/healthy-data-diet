@@ -132,11 +132,11 @@ def measure_bias_metrics(model, tokenizer, args):
         )
     )
 
-    output_file = "./output/demographic_parity_"+args.method+".json"
+    output_file = "./output/demographic_parity_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(demographic_parity), f, indent=2)
 
-    output_file = "./output/CTF_"+args.method+".json"
+    output_file = "./output/CTF_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(CTF), f, indent=2)
     # ===================================================#
@@ -225,15 +225,15 @@ def measure_bias_metrics(model, tokenizer, args):
         + accuracy_opposite_gender["before_bias_reduction"]
     )
 
-    output_file = "./output/accuracy_overall_"+args.method+".json"
+    output_file = "./output/accuracy_overall_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_overall), f, indent=2)
 
-    output_file = "./output/accuracy_original_gender_"+args.method+".json"
+    output_file = "./output/accuracy_original_gender_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_original_gender), f, indent=2)
 
-    output_file = "./output/accuracy_opposite_gender_"+args.method+".json"
+    output_file = "./output/accuracy_opposite_gender_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_opposite_gender), f, indent=2)
     # ===================================================#
@@ -310,11 +310,11 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     TNR["before_bias_reduction"] = 1 - torch.mean(torch.from_numpy(y_pred).double())
 
-    output_file = "./output/equality_of_opportunity_y_equal_0_"+args.method+".json"
+    output_file = "./output/equality_of_opportunity_y_equal_0_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_opportunity_y_equal_0), f, indent=2)
 
-    output_file = "./output/TNR_"+args.method+".json"
+    output_file = "./output/TNR_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(TNR), f, indent=2)
 
@@ -392,11 +392,11 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     TPR["before_bias_reduction"] = torch.mean(torch.from_numpy(y_pred).double())
 
-    output_file = "./output/equality_of_opportunity_y_equal_1_"+args.method+".json"
+    output_file = "./output/equality_of_opportunity_y_equal_1_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_opportunity_y_equal_1), f, indent=2)
 
-    output_file = "./output/TPR_"+args.method+".json"
+    output_file = "./output/TPR_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(TPR), f, indent=2)
     # ===================================================#
@@ -410,7 +410,7 @@ def measure_bias_metrics(model, tokenizer, args):
         equality_of_opportunity_y_equal_0["before_bias_reduction"]
         + equality_of_opportunity_y_equal_1["before_bias_reduction"]
     )
-    output_file = "./output/equality_of_odds_"+args.method+".json"
+    output_file = "./output/equality_of_odds_" + args.method + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_odds), f, indent=2)
     # ===================================================#
