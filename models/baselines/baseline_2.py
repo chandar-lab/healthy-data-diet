@@ -283,9 +283,7 @@ def train_baseline_2(args):
     """
     wandb.init(
         name=str(args.dataset) + " using " + str(args.norm) + " distance",
-        project="Baseline 2 in reducing bias in "
-        + str(args.dataset)
-        ,
+        project="Baseline 2 in reducing bias in " + str(args.dataset),
         config=args,
     )
     # Define pretrained tokenizer and mode
@@ -331,7 +329,9 @@ def train_baseline_2(args):
             model,
             best_validation_reward,
             validation_data[validation_data["minority"] == True],
-            validation_data_gender_swap[validation_data_gender_swap["minority"] == True],
+            validation_data_gender_swap[
+                validation_data_gender_swap["minority"] == True
+            ],
         )
 
     # Load the model that has the best performance on the validation data
