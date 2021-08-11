@@ -14,16 +14,16 @@ def parse_args():
     # choosing between our work and the baselines
     parser.add_argument(
         "--method",
-        choices=["ours","baseline_1", "baseline_2","baseline_3"],
+        choices=["ours", "baseline_1", "baseline_2", "baseline_3"],
         default="ours",
         help="Choosing between our work and some of the baseline methods",
-    )    
+    )
     parser.add_argument(
         "--approach",
-        choices=["policy_gradient","supervised_learning"],
+        choices=["policy_gradient", "supervised_learning"],
         default="policy_gradient",
         help="Choosing between supervised learning and policy gradient approaches",
-    )        
+    )
     # arguments for the policy gradient algorithm
     parser.add_argument("--batch_size", type=int, default=64, help="Samples per batch")
     parser.add_argument(
@@ -129,17 +129,17 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    if(args.method == "ours"):
-      # Measure the performance of our model
-      model, tokenizer = run_experiment(args)
-      measure_bias_metrics(model, tokenizer, args)
+    if args.method == "ours":
+        # Measure the performance of our model
+        model, tokenizer = run_experiment(args)
+        measure_bias_metrics(model, tokenizer, args)
 
-    elif(args.method == "baseline_1"):
-      # Measure the perfrmance of the first baseline, which is increases the size of the dataset by gender flipping (data augmentation)
-      model, tokenizer = train_baseline_1(args)
-      measure_bias_metrics(model, tokenizer, args) 
+    elif args.method == "baseline_1":
+        # Measure the perfrmance of the first baseline, which is increases the size of the dataset by gender flipping (data augmentation)
+        model, tokenizer = train_baseline_1(args)
+        measure_bias_metrics(model, tokenizer, args)
 
-    elif(args.method == "baseline_2"):
-      # Measure the perfrmance of the second baseline, which is explained here https://arxiv.org/pdf/1911.03861.pdf
-      model, tokenizer = train_baseline_2(args)
-      measure_bias_metrics(model, tokenizer, args)                    
+    elif args.method == "baseline_2":
+        # Measure the perfrmance of the second baseline, which is explained here https://arxiv.org/pdf/1911.03861.pdf
+        model, tokenizer = train_baseline_2(args)
+        measure_bias_metrics(model, tokenizer, args)
