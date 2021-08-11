@@ -17,20 +17,31 @@ def train_baseline_1(args):
     # Read data
     data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
     data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-    data_train_gender_swap = pd.read_csv("./data/" + args.dataset + "_train_gender_swap.csv")
-    data_valid_gender_swap = pd.read_csv("./data/" + args.dataset + "_valid_gender_swap.csv")    
-    
-    data_train_gender_swap = data_train_gender_swap.rename(columns={data_train_gender_swap.columns[0]: data_train.columns[0]})
-    data_train = pd.concat([data_train,data_train_gender_swap],axis = 0, ignore_index=True)   
-    
-    data_valid_gender_swap = data_valid_gender_swap.rename(columns={data_valid_gender_swap.columns[0]: data_valid.columns[0]})
-    data_valid = pd.concat([data_valid,data_valid_gender_swap],axis = 0, ignore_index=True)       
-    
+    data_train_gender_swap = pd.read_csv(
+        "./data/" + args.dataset + "_train_gender_swap.csv"
+    )
+    data_valid_gender_swap = pd.read_csv(
+        "./data/" + args.dataset + "_valid_gender_swap.csv"
+    )
+
+    data_train_gender_swap = data_train_gender_swap.rename(
+        columns={data_train_gender_swap.columns[0]: data_train.columns[0]}
+    )
+    data_train = pd.concat(
+        [data_train, data_train_gender_swap], axis=0, ignore_index=True
+    )
+
+    data_valid_gender_swap = data_valid_gender_swap.rename(
+        columns={data_valid_gender_swap.columns[0]: data_valid.columns[0]}
+    )
+    data_valid = pd.concat(
+        [data_valid, data_valid_gender_swap], axis=0, ignore_index=True
+    )
+
     # The number of epochs afterwhich we save the model. We set it to this value to only save the last model.
     checkpoint_steps = (
         int(len(data_train) / args.batch_size_classifier) * args.num_epochs_classifier
     )
-
 
     # Define tokenizer and model
     model_name = args.classifier_model
@@ -39,7 +50,6 @@ def train_baseline_1(args):
         model_name,
         num_labels=len(data_train[data_train.columns[1]].unique()),
         output_attentions=True,
-
     )
 
     # ----- 1. Preprocess data -----#
