@@ -549,4 +549,3 @@ def run_experiment(args):
             json.dump(str(test_accuracy_minority), f, indent=2)
 
     return model, tokenizer
-
