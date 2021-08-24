@@ -3,7 +3,7 @@ from transformers import TrainingArguments, Trainer
 from transformers import BertTokenizer, BertForSequenceClassification
 from transformers import EarlyStoppingCallback
 import torch
-from modelsclassifier import Dataset, measure_performance_metrics
+from models.classifier import Dataset, measure_performance_metrics
 from argparse import ArgumentParser
 
 
