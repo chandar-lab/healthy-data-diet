@@ -281,14 +281,13 @@ def epoch_loss(
             ):
                 # We can only compute the bias if the number of examples in data
                 #and data_gender_swap is the same
-                if args.norm == "l1":
-                    reward_bias = -args.lambda_gender * torch.norm(
-                        results_original_gender - results_gender_swap, dim=1, p= norm_p_value
-                    ).to(device) - args.lambda_data * torch.norm(
-                        results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
-                    ).to(
-                        device
-                    )
+                reward_bias = -args.lambda_gender * torch.norm(
+                    results_original_gender - results_gender_swap, dim=1, p= norm_p_value
+                ).to(device) - args.lambda_data * torch.norm(
+                    results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
+                ).to(
+                    device
+                )
 
             else:
                 # If the nummber of examples in data and data_gender_swap is
@@ -338,14 +337,13 @@ def epoch_loss(
             ):
                 # We can only compute the bias if the number of examples in data
                 #and data_gender_swap is the same
-                if args.norm == "l1":
-                    bias = args.lambda_gender * torch.norm(
-                        results_original_gender - results_gender_swap, dim=1, p= norm_p_value
-                    ).to(device) + args.lambda_data * torch.norm(
-                        results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
-                    ).to(
-                        device
-                    )
+                bias = args.lambda_gender * torch.norm(
+                    results_original_gender - results_gender_swap, dim=1, p= norm_p_value
+                ).to(device) + args.lambda_data * torch.norm(
+                    results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
+                ).to(
+                    device
+                )
             else:
                 # If the nummber of examples in data and data_gender_swap is
                 #different, we set the bias to an arbitrary value of -1,
