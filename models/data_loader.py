@@ -1,5 +1,5 @@
 import pandas as pd
-from transformers import BertTokenizer, BertForSequenceClassification
+from transformers import BertTokenizer
 import torch
 
 # Create torch dataset
@@ -22,14 +22,24 @@ class Dataset(torch.utils.data.Dataset):
         return len(self.encodings["input_ids"])
 
 
-def data_loader(args, test_subset=None):
+def data_loader(args, subset=None, apply_data_augmentation = None):
     """
-    Load the data  from the CSV files and an object for each split in the dataset. For each dataset, we have the data stored in both the original form, as well the gender flipped form.
+    Load the data  from the CSV files and an object for each split in the dataset.
+    For each dataset, we have the data stored in both the original form, as well
+    the gender flipped form.
     args:
         args: the arguments given by the user
-        test_subset: refers to whether to test on the whole test dataset, or a suset of it. The subset could be either the minority examples (the examples on which the unintended correlation helps), or the majority examples (the examples on which unintended correlation hurts.)
+        subset: refers to whether to consider the whole dataset or a suset of it.
+        The subset could be either the minority examples (the examples on which
+        the unintended correlation helps), or the majority examples (the examples
+        on which unintended correlation hurts).
+        apply_data_augmentation: a flag to choose whether or not to apply data 
+        augmentation, meaning that the number of examples doubles because we flip
+        the gender in each example and add it as a new example.
     returns:
-        the function returns 3 objects, for the training, validation and test datasets. Each object contains the tokenized data for both genders and the labels.
+        the function returns 3 objects, for the training, validation and test 
+        datasets. Each object contains the tokenized data for both genders and 
+        the labels.
     """
     data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
     data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
@@ -44,17 +54,47 @@ def data_loader(args, test_subset=None):
     data_test_gender_swap = pd.read_csv(
         "./data/" + args.dataset + "_test_gender_swap.csv"
     )
-
-    if test_subset == "majority":
+    
+    X_train_paraphrased = list(data_train[data_train.columns[4]])
+    if(apply_data_augmentation==True):
+        # We make sure that the column names are the same, to be able to concatenate them into a single data frame
+        data_train_gender_swap = data_train_gender_swap.rename(
+            columns={data_train_gender_swap.columns[0]: data_train.columns[0]}
+        )
+        data_train = pd.concat(
+            [data_train, data_train_gender_swap], axis=0, ignore_index=True
+        )
+    
+    if subset == "majority":
         data_test = data_test[data_test["majority"] == True]
         data_test_gender_swap = data_test_gender_swap[
             data_test_gender_swap["majority"] == True
         ]
-    elif test_subset == "minority":
+        
+        data_train = data_train[data_train["majority"] == True]
+        data_train_gender_swap = data_train_gender_swap[
+            data_train_gender_swap["majority"] == True
+        ]
+        
+        data_valid = data_valid[data_valid["majority"] == True]
+        data_valid_gender_swap = data_valid_gender_swap[
+            data_valid_gender_swap["majority"] == True
+        ]        
+    elif subset == "minority":
         data_test = data_test[data_test["minority"] == True]
         data_test_gender_swap = data_test_gender_swap[
             data_test_gender_swap["minority"] == True
         ]
+        
+        data_train = data_train[data_train["minority"] == True]
+        data_train_gender_swap = data_train_gender_swap[
+            data_train_gender_swap["minority"] == True
+        ]
+        
+        data_valid = data_valid[data_valid["minority"] == True]
+        data_valid_gender_swap = data_valid_gender_swap[
+            data_valid_gender_swap["minority"] == True
+        ]   
 
     model_name = args.classifier_model
     tokenizer = BertTokenizer.from_pretrained(model_name)
@@ -65,7 +105,6 @@ def data_loader(args, test_subset=None):
     X_train_gender_swap = list(
         data_train_gender_swap[data_train_gender_swap.columns[0]]
     )
-    X_train_paraphrased = list(data_train[data_train.columns[4]])
     y_train = list(data_train[data_train.columns[1]])
 
     X_val = list(data_valid[data_valid.columns[0]])
