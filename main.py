@@ -1,10 +1,7 @@
 # Main script for gathering args.
-
-import argparse
 from experiment import run_experiment
-from models.baselines.baseline_1 import train_baseline_1
-from models.baselines.baseline_2 import train_baseline_2
-from models.classifier import measure_bias_metrics
+from models.data_loader import data_loader
+from models.classifier import measure_bias_metrics, train_classifier
 from argparse import ArgumentParser
 
 
@@ -14,7 +11,7 @@ def parse_args():
     # choosing between our work and the baselines
     parser.add_argument(
         "--method",
-        choices=["ours", "baseline_1", "baseline_2", "baseline_3"],
+        choices=["ours", "baseline_data_augmentation", "baseline_forgettable_examples", "baseline_mind_the_tradeoff"],
         default="ours",
         help="Choosing between our work and some of the baseline methods",
     )
@@ -24,16 +21,15 @@ def parse_args():
         default="policy_gradient",
         help="Choosing between supervised learning and policy gradient approaches",
     )
-    # arguments for the policy gradient algorithm
     parser.add_argument("--batch_size", type=int, default=64, help="Samples per batch")
     parser.add_argument(
-        "--num_epochs_PG",
+        "--num_epochs",
         type=int,
         default=15,
-        help="Number of training epochs for the policy gradient algorithm",
+        help="Number of training epochs",
     )
     parser.add_argument(
-        "--learning_rate_PG",
+        "--learning_rate",
         type=float,
         default=1.41e-6,
         help="learning rate for the Bert classifier",
@@ -132,14 +128,26 @@ if __name__ == "__main__":
     if args.method == "ours":
         # Measure the performance of our model
         model, tokenizer = run_experiment(args)
-        measure_bias_metrics(model, tokenizer, args)
+        _, val_dataset, _ = data_loader(args)
+        measure_bias_metrics(model, val_dataset, args)
 
-    elif args.method == "baseline_1":
-        # Measure the perfrmance of the first baseline, which is increases the size of the dataset by gender flipping (data augmentation)
-        model, tokenizer = train_baseline_1(args)
-        measure_bias_metrics(model, tokenizer, args)
+    elif args.method == "baseline_data_augmentation":
+        # Measure the perfrmance of the first baseline, 
+        #which is increases the size of the dataset by gender flipping (data augmentation)
+        model, tokenizer = train_classifier(args, data_augmentation_flag=True)
+        _, val_dataset, _ = data_loader(args)
+        measure_bias_metrics(model, val_dataset, args)
 
-    elif args.method == "baseline_2":
-        # Measure the perfrmance of the second baseline, which is explained here https://arxiv.org/pdf/1911.03861.pdf
-        model, tokenizer = train_baseline_2(args)
-        measure_bias_metrics(model, tokenizer, args)
+    elif args.method == "baseline_forgettable_examples":
+        # Measure the perfrmance of the second baseline, which is explained here https://arxiv.org/pdf/1911.03861.pdf. 
+        #We have to set the args.approach to "supervised_learning", because that's how the paper implements it.
+        model, tokenizer = run_experiment(args)
+        _, val_dataset, _ = data_loader(args)
+        measure_bias_metrics(model, val_dataset, args)
+
+    elif args.method == "baseline_mind_the_tradeoff":
+        # Measure the perfrmance of the third baseline, which is explained here https://arxiv.org/pdf/2005.00315.pdf. 
+        #We have to set the args.approach to "supervised_learning", because that's how the paper implements it.
+        model, tokenizer = run_experiment(args)
+        _, val_dataset, _ = data_loader(args)
+        measure_bias_metrics(model, val_dataset, args)
