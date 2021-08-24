@@ -28,7 +28,6 @@ def training_epoch(
         optimizer: the optimizer used to minize the loss
         device: the current device (cpu or gpu)
         tokenizer: the tokenizer used before giving the sentences to the classifier
-        model: the pretrained classifier
         train_dataset: the training data object
     returns:
         loss (torch.tensor): the training epoch loss
