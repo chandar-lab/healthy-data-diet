@@ -1,18 +1,16 @@
-import pandas as pd
 from transformers import TrainingArguments, Trainer
 from transformers import BertTokenizer, BertForSequenceClassification
 from transformers import EarlyStoppingCallback
+from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
+from models.data_loader import data_loader
 import torch
 import json
 import numpy as np
-from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
-from models.data_loader import data_loader
-
+import pandas as pd
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-softmax = torch.nn.Softmax(dim=1).to(device)
 
 
-def measure_bias_metrics(model, tokenizer, args):
+def measure_bias_metrics(model_after_bias_reduction, dataset, args):
     """
     Compute metrics that measure the bias before and after applying our
     de-biasing algorithm.
@@ -22,8 +20,8 @@ def measure_bias_metrics(model, tokenizer, args):
     3) Counterfactual token fairness
     4) True negative rate
     5) True positive rate
-    6) Accuracy for both the original and opposite gender (each separately and
-    combined)
+    6) Accuracy for both the original and opposite gender (each separately
+    and combined)
     7) Equality of opportunity
     args:
         args: the arguments given by the user
@@ -31,394 +29,130 @@ def measure_bias_metrics(model, tokenizer, args):
         algorithm.
         tokenizer: the tokenizer used before giving the sentences to the classifier
     returns:
-        the function doesnt return anything, since all the metrics are saved in
-        json files.
+        the function doesnt return anything, since all the metrics are saved
+        in json files.
     """
     demographic_parity = {}
-    CTF = {}
-    # Load validation data
-    valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-
-    input_column_name = valid_data.columns[0]
-    label_column_name = valid_data.columns[1]
-    number_of_labels = len(valid_data[valid_data.columns[1]].unique())
-    X_valid = list(valid_data[input_column_name])
-    Y_valid = list(valid_data[label_column_name])
-    X_valid_tokenized = tokenizer(
-        X_valid, padding=True, truncation=True, max_length=args.max_length
-    )
-
-    valid_data_opposite_gender = pd.read_csv(
-        "./data/" + args.dataset + "_valid_gender_swap.csv"
-    )
-
-    input_column_name_gender_swap = valid_data_opposite_gender.columns[0]
-    X_valid_opposite_gender = list(
-        valid_data_opposite_gender[input_column_name_gender_swap]
-    )
-    Y_valid_opposite_gender = list(valid_data_opposite_gender[label_column_name])
-    X_valid_tokenized_opposite_gender = tokenizer(
-        X_valid_opposite_gender,
-        padding=True,
-        truncation=True,
-        max_length=args.max_length,
-    )
-
-    # Create torch dataset
-    valid_dataset = Dataset(X_valid_tokenized)
+    
+    y_pred_after_bias_reduction = {}
+    y_pred_before_bias_reduction = {}
+    
+    y_pred_opposite_gender_after_bias_reduction = {}
+    y_pred_opposite_gender_before_bias_reduction = {}
+    
     checkpoint_steps = (
         int(
             len(pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv"))
-            / args.batch_size_classifier
+            / args.batch_size_pretraining
         )
-        * args.num_epochs_classifier
-    )
-    # Define test trainer
-    test_trainer = Trainer(model)
-    # Make prediction
-    raw_pred, _, _ = test_trainer.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
-
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer.predict(valid_dataset_opposite_gender)
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
-
-    demographic_parity["after_bias_reduction"] = 1 - torch.abs(
-        torch.mean(torch.from_numpy(y_pred).double())
-        - torch.mean(torch.from_numpy(y_pred_opposite_gender).double())
-    )
-    CTF["after_bias_reduction"] = torch.mean(
-        torch.abs(
-            softmax(torch.from_numpy(raw_pred[0]))[:, 1]
-            - softmax(torch.from_numpy(raw_pred_opposite_gender[0]))[:, 1]
-        )
+        * args.num_epochs_pretraining
     )
 
-    # We also compute the same metric before reducing the bias
-    # Load trained model
+    # Load trained model before bias reduction
     model_path = "./saved_models/checkpoint-" + str(checkpoint_steps)
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
-        model_path, num_labels=number_of_labels, output_attentions=True
-    )
+        model_path, num_labels=len(set(dataset.labels)), output_attentions=True
+    )    
+    
 
-    # Define test trainer
-    test_trainer_before_bias_reduction = Trainer(model_before_bias_reduction)
-    # Make prediction
-    raw_pred, _, _ = test_trainer_before_bias_reduction.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
+    for i in range(int(np.ceil(dataset.__len__() / args.batch_size))):
 
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer_before_bias_reduction.predict(
-        valid_dataset_opposite_gender
-    )
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
+        results_original_gender_after_bias_reduction = model_after_bias_reduction.forward(
+            input_ids=torch.tensor(
+                dataset.encodings["input_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            attention_mask=torch.tensor(
+                dataset.encodings["attention_mask"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            token_type_ids=torch.tensor(
+                dataset.encodings["token_type_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+        )[0]
+        results_gender_swap_after_bias_reduction = model_after_bias_reduction.forward(
+            input_ids=torch.tensor(
+                dataset.encodings_gender_swap["input_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            attention_mask=torch.tensor(
+                dataset.encodings_gender_swap["attention_mask"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            token_type_ids=torch.tensor(
+                dataset.encodings_gender_swap["token_type_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+        )[0]
+        
+        results_original_gender_before_bias_reduction = model_before_bias_reduction.forward(
+            input_ids=torch.tensor(
+                dataset.encodings["input_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            attention_mask=torch.tensor(
+                dataset.encodings["attention_mask"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            token_type_ids=torch.tensor(
+                dataset.encodings["token_type_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+        )[0]
+        results_gender_swap_before_bias_reduction = model_before_bias_reduction.forward(
+            input_ids=torch.tensor(
+                dataset.encodings_gender_swap["input_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            attention_mask=torch.tensor(
+                dataset.encodings_gender_swap["attention_mask"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+            token_type_ids=torch.tensor(
+                dataset.encodings_gender_swap["token_type_ids"][
+                    i * args.batch_size : (i + 1) * args.batch_size
+                ]
+            ).to(device),
+        )[0]        
+        
+        y_pred_after_bias_reduction.append(results_original_gender_after_bias_reduction)
+        y_pred_opposite_gender_after_bias_reduction.append(results_gender_swap_after_bias_reduction)
 
+        y_pred_before_bias_reduction.append(results_original_gender_before_bias_reduction)
+        y_pred_opposite_gender_before_bias_reduction.append(results_gender_swap_before_bias_reduction)        
+        
+    demographic_parity["after_bias_reduction"] = 1 - torch.abs(
+        torch.mean(y_pred_after_bias_reduction.double())
+        - torch.mean(y_pred_opposite_gender_after_bias_reduction.double())
+    )    
+    
+        
     demographic_parity["before_bias_reduction"] = 1 - torch.abs(
-        torch.mean(torch.from_numpy(y_pred).double())
-        - torch.mean(torch.from_numpy(y_pred_opposite_gender).double())
-    )
-    CTF["before_bias_reduction"] = torch.mean(
-        torch.abs(
-            softmax(torch.from_numpy(raw_pred[0]))[:, 1]
-            - softmax(torch.from_numpy(raw_pred_opposite_gender[0]))[:, 1]
-        )
-    )
-
-    output_file = "./output/demographic_parity_" + args.method + + "_" + args.approach + ".json"
+        torch.mean(y_pred_before_bias_reduction.double())
+        - torch.mean(y_pred_opposite_gender_before_bias_reduction.double())
+    )        
+    
+    output_file = "./output/demographic_parity_" + args.method + + "_" + args.approach + + "_" + args.dataset + ".json"
     with open(output_file, "w+") as f:
-        json.dump(str(demographic_parity), f, indent=2)
-
-    output_file = "./output/CTF_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(CTF), f, indent=2)
-    # ===================================================#
-
-    accuracy_original_gender = {}
-    accuracy_opposite_gender = {}
-    accuracy_overall = {}
-
-    # Load validation data
-    valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-    X_valid = list(valid_data[input_column_name])
-    Y_valid = list(valid_data[label_column_name])
-    X_valid_tokenized = tokenizer(
-        X_valid, padding=True, truncation=True, max_length=args.max_length
-    )
-
-    valid_data_opposite_gender = pd.read_csv(
-        "./data/" + args.dataset + "_valid_gender_swap.csv"
-    )
-    X_valid_opposite_gender = list(
-        valid_data_opposite_gender[input_column_name_gender_swap]
-    )
-    Y_valid_opposite_gender = list(valid_data_opposite_gender[label_column_name])
-    X_valid_tokenized_opposite_gender = tokenizer(
-        X_valid_opposite_gender,
-        padding=True,
-        truncation=True,
-        max_length=args.max_length,
-    )
-
-    # Create torch dataset
-    valid_dataset = Dataset(X_valid_tokenized)
-
-    # Define test trainer
-    test_trainer = Trainer(model)
-    # Make prediction
-    raw_pred, _, _ = test_trainer.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
-
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer.predict(valid_dataset_opposite_gender)
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
-
-    accuracy_original_gender["after_bias_reduction"] = torch.sum(
-        torch.tensor(y_pred).double() == torch.tensor(Y_valid).double()
-    ) / len(y_pred)
-    accuracy_opposite_gender["after_bias_reduction"] = torch.sum(
-        torch.tensor(y_pred_opposite_gender).double()
-        == torch.tensor(Y_valid_opposite_gender).double()
-    ) / len(y_pred_opposite_gender)
-
-    # Make prediction
-    raw_pred, _, _ = test_trainer_before_bias_reduction.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
-
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer_before_bias_reduction.predict(
-        valid_dataset_opposite_gender
-    )
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
-
-    accuracy_original_gender["before_bias_reduction"] = torch.sum(
-        torch.tensor(y_pred).double() == torch.tensor(Y_valid).double()
-    ) / len(y_pred)
-    accuracy_opposite_gender["before_bias_reduction"] = torch.sum(
-        torch.tensor(y_pred_opposite_gender).double()
-        == torch.tensor(Y_valid_opposite_gender).double()
-    ) / len(y_pred_opposite_gender)
-
-    accuracy_overall["after_bias_reduction"] = 0.5 * (
-        accuracy_original_gender["after_bias_reduction"]
-        + accuracy_opposite_gender["after_bias_reduction"]
-    )
-    accuracy_overall["before_bias_reduction"] = 0.5 * (
-        accuracy_original_gender["before_bias_reduction"]
-        + accuracy_opposite_gender["before_bias_reduction"]
-    )
-
-    output_file = "./output/accuracy_overall_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(accuracy_overall), f, indent=2)
-
-    output_file = "./output/accuracy_original_gender_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(accuracy_original_gender), f, indent=2)
-
-    output_file = "./output/accuracy_opposite_gender_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(accuracy_opposite_gender), f, indent=2)
-    # ===================================================#
-
-    equality_of_opportunity_y_equal_0 = {}
-    TNR = {}
-
-    # Load validation data
-    valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-    valid_data_non_sexist_tweets = valid_data.loc[valid_data[label_column_name] == 0]
-    X_valid = list(valid_data_non_sexist_tweets[input_column_name])
-    X_valid_tokenized = tokenizer(
-        X_valid, padding=True, truncation=True, max_length=args.max_length
-    )
-
-    valid_data_opposite_gender = pd.read_csv(
-        "./data/" + args.dataset + "_valid_gender_swap.csv"
-    )
-    valid_data_opposite_gender_non_sexist_tweets = valid_data_opposite_gender.loc[
-        valid_data_opposite_gender[label_column_name] == 0
-    ]
-    X_valid_opposite_gender = list(
-        valid_data_opposite_gender_non_sexist_tweets[input_column_name_gender_swap]
-    )
-    X_valid_tokenized_opposite_gender = tokenizer(
-        X_valid_opposite_gender,
-        padding=True,
-        truncation=True,
-        max_length=args.max_length,
-    )
-
-    # Create torch dataset
-    valid_dataset = Dataset(X_valid_tokenized)
-    # Define test trainer
-
-    test_trainer = Trainer(model)
-    # Make prediction
-    raw_pred, _, _ = test_trainer.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
-
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer.predict(valid_dataset_opposite_gender)
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
-
-    equality_of_opportunity_y_equal_0["after_bias_reduction"] = 1 - torch.abs(
-        torch.mean(torch.from_numpy(y_pred).double())
-        - torch.mean(torch.from_numpy(y_pred_opposite_gender).double())
-    )
-    TNR["after_bias_reduction"] = 1 - torch.mean(torch.from_numpy(y_pred).double())
-
-    # Make prediction
-    raw_pred, _, _ = test_trainer_before_bias_reduction.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
-
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer_before_bias_reduction.predict(
-        valid_dataset_opposite_gender
-    )
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
-
-    equality_of_opportunity_y_equal_0["before_bias_reduction"] = 1 - torch.abs(
-        torch.mean(torch.from_numpy(y_pred).double())
-        - torch.mean(torch.from_numpy(y_pred_opposite_gender).double())
-    )
-    TNR["before_bias_reduction"] = 1 - torch.mean(torch.from_numpy(y_pred).double())
-
-    output_file = "./output/equality_of_opportunity_y_equal_0_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(equality_of_opportunity_y_equal_0), f, indent=2)
-
-    output_file = "./output/TNR_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(TNR), f, indent=2)
-
-    # ===================================================#
-
-    equality_of_opportunity_y_equal_1 = {}
-    TPR = {}
-
-    # Load validation data
-    valid_data = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
-    valid_data_sexist_tweets = valid_data.loc[valid_data[label_column_name] == 1]
-    X_valid = list(valid_data_sexist_tweets[input_column_name])
-    X_valid_tokenized = tokenizer(
-        X_valid, padding=True, truncation=True, max_length=args.max_length
-    )
-
-    valid_data_opposite_gender = pd.read_csv(
-        "./data/" + args.dataset + "_valid_gender_swap.csv"
-    )
-    valid_data_opposite_gender_sexist_tweets = valid_data_opposite_gender.loc[
-        valid_data_opposite_gender[label_column_name] == 1
-    ]
-    X_valid_opposite_gender = list(
-        valid_data_opposite_gender_sexist_tweets[input_column_name_gender_swap]
-    )
-    X_valid_tokenized_opposite_gender = tokenizer(
-        X_valid_opposite_gender,
-        padding=True,
-        truncation=True,
-        max_length=args.max_length,
-    )
-
-    # Create torch dataset
-    valid_dataset = Dataset(X_valid_tokenized)
-
-    # Define test trainer
-    test_trainer = Trainer(model)
-    # Make prediction
-    raw_pred, _, _ = test_trainer.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
-
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer.predict(valid_dataset_opposite_gender)
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
-
-    equality_of_opportunity_y_equal_1["after_bias_reduction"] = 1 - torch.abs(
-        torch.mean(torch.from_numpy(y_pred).double())
-        - torch.mean(torch.from_numpy(y_pred_opposite_gender).double())
-    )
-    TPR["after_bias_reduction"] = torch.mean(torch.from_numpy(y_pred).double())
-
-    # Make prediction
-    raw_pred, _, _ = test_trainer_before_bias_reduction.predict(valid_dataset)
-    # Preprocess raw predictions
-    y_pred = np.argmax(raw_pred[0], axis=1)
-
-    # Load validation data for the opposite gender
-    # Create torch dataset
-    valid_dataset_opposite_gender = Dataset(X_valid_tokenized_opposite_gender)
-    # Make prediction
-    raw_pred_opposite_gender, _, _ = test_trainer_before_bias_reduction.predict(
-        valid_dataset_opposite_gender
-    )
-    # Preprocess raw predictions
-    y_pred_opposite_gender = np.argmax(raw_pred_opposite_gender[0], axis=1)
-
-    equality_of_opportunity_y_equal_1["before_bias_reduction"] = 1 - torch.abs(
-        torch.mean(torch.from_numpy(y_pred).double())
-        - torch.mean(torch.from_numpy(y_pred_opposite_gender).double())
-    )
-    TPR["before_bias_reduction"] = torch.mean(torch.from_numpy(y_pred).double())
-
-    output_file = "./output/equality_of_opportunity_y_equal_1_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(equality_of_opportunity_y_equal_1), f, indent=2)
-
-    output_file = "./output/TPR_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(TPR), f, indent=2)
-    # ===================================================#
-
-    equality_of_odds = {}
-    equality_of_odds["after_bias_reduction"] = 0.5 * (
-        equality_of_opportunity_y_equal_0["after_bias_reduction"]
-        + equality_of_opportunity_y_equal_1["after_bias_reduction"]
-    )
-    equality_of_odds["before_bias_reduction"] = 0.5 * (
-        equality_of_opportunity_y_equal_0["before_bias_reduction"]
-        + equality_of_opportunity_y_equal_1["before_bias_reduction"]
-    )
-    output_file = "./output/equality_of_odds_" + args.method + + "_" + args.approach + ".json"
-    with open(output_file, "w+") as f:
-        json.dump(str(equality_of_odds), f, indent=2)
-    # ===================================================#
+        json.dump(str(demographic_parity), f, indent=2)    
+    
 
 
-# Some of the following parts are taken from https://towardsdatascience.com/fine-tuning-pretrained-nlp-models-with-huggingfaces-trainer-6326a4456e7b by Vincent Tan
+# Some of the following parts are taken from
+# https://towardsdatascience.com/fine-tuning-pretrained-nlp-models-with-huggingfaces-trainer-6326a4456e7b
+# by Vincent Tan
 def train_classifier(args,data_augmentation_flag=None):
     """
     Train a classifier to be used as our starting point for polcy gradient.
@@ -430,16 +164,17 @@ def train_classifier(args,data_augmentation_flag=None):
         augmentation, meaning that the number of examples doubles because we
         flip the gender in each example and add it as a new example.
     returns:
-        model: the model that is going to be our starting point for policy
-        gradient
+        model: the model that is going to be our starting point for polic
+        y gradient
         tokenizer: the tokenizer used before giving the sentences to the
         classifier model
     """
     # Load the dataset
     train_dataset, val_dataset, test_dataset = data_loader(args,apply_data_augmentation=data_augmentation_flag)
-    # The number of epochs afterwhich we save the model. We set it to this value to only save the last model.
+    # The number of epochs afterwhich we save the model. We set it to this
+    #value to only save the last model.
     checkpoint_steps = (
-        int(train_dataset.__len__()/ args.batch_size_classifier) * args.num_epochs_classifier
+        int(train_dataset.__len__()/ args.batch_size_pretraining) * args.num_epochs_pretraining
     )
 
     if args.load_pretrained_classifier:
@@ -469,9 +204,9 @@ def train_classifier(args,data_augmentation_flag=None):
             output_dir=args.output_dir,
             evaluation_strategy="steps",
             eval_steps=checkpoint_steps,
-            per_device_train_batch_size=args.batch_size_classifier,
-            per_device_eval_batch_size=args.batch_size_classifier,
-            num_train_epochs=args.num_epochs_classifier,
+            per_device_train_batch_size=args.batch_size_pretraining,
+            per_device_eval_batch_size=args.batch_size_pretraining,
+            num_train_epochs=args.num_epochs_pretraining,
             load_best_model_at_end=True,
         )
         trainer = Trainer(
