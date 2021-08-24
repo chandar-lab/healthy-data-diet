@@ -281,13 +281,13 @@ def epoch_loss(
             ):
                 # We can only compute the bias if the number of examples in data
                 #and data_gender_swap is the same
-                reward_bias = -args.lambda_gender * torch.norm(
-                    results_original_gender - results_gender_swap, dim=1, p= norm_p_value
-                ).to(device) - args.lambda_data * torch.norm(
-                    results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
-                ).to(
-                    device
-                )
+                reward_bias_gender = -args.lambda_gender * torch.norm(
+                    results_original_gender - results_gender_swap, dim=1, p= norm_p_value).to(device)
+
+                reward_bias_data = - args.lambda_data * torch.norm(
+                    results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value).to(device)
+
+                reward_bias =  reward_bias_gender + reward_bias_data
 
             else:
                 # If the nummber of examples in data and data_gender_swap is
@@ -336,14 +336,16 @@ def epoch_loss(
                 dataset.encodings_gender_swap["input_ids"]
             ):
                 # We can only compute the bias if the number of examples in data
-                #and data_gender_swap is the same
-                bias = args.lambda_gender * torch.norm(
+                # and data_gender_swap is the same
+
+                bias_gender = args.lambda_gender * torch.norm(
                     results_original_gender - results_gender_swap, dim=1, p= norm_p_value
-                ).to(device) + args.lambda_data * torch.norm(
-                    results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
-                ).to(
-                    device
-                )
+                ).to(device)
+
+                bias_data = args.lambda_data * torch.norm(
+                    results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value).to(device)
+                    
+                bias = bias_gender + bias_data
             else:
                 # If the nummber of examples in data and data_gender_swap is
                 #different, we set the bias to an arbitrary value of -1,
