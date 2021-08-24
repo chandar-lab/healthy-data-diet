@@ -3,11 +3,9 @@ from transformers import TrainingArguments, Trainer
 from transformers import BertTokenizer, BertForSequenceClassification
 from transformers import EarlyStoppingCallback
 import torch
-import os
 import json
 import numpy as np
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
-from sklearn.model_selection import train_test_split
 from models.data_loader import data_loader
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -16,21 +14,25 @@ softmax = torch.nn.Softmax(dim=1).to(device)
 
 def measure_bias_metrics(model, tokenizer, args):
     """
-    Compute metrics that measure the bias before and after applying our de-biasing algorithm.
+    Compute metrics that measure the bias before and after applying our
+    de-biasing algorithm.
     The metrics that we compute are the following:
     1) Demagraphic parity
     2) Equality of odds
     3) Counterfactual token fairness
     4) True negative rate
     5) True positive rate
-    6) Accuracy for both the original and opposite gender (each separately and combined)
+    6) Accuracy for both the original and opposite gender (each separately and
+    combined)
     7) Equality of opportunity
     args:
         args: the arguments given by the user
-        model: the model after updating its weights based on the policy gradient algorithm.
+        model: the model after updating its weights based on the policy gradient
+        algorithm.
         tokenizer: the tokenizer used before giving the sentences to the classifier
     returns:
-        the function doesnt return anything, since all the metrics are saved in json files.
+        the function doesnt return anything, since all the metrics are saved in
+        json files.
     """
     demographic_parity = {}
     CTF = {}
@@ -132,11 +134,11 @@ def measure_bias_metrics(model, tokenizer, args):
         )
     )
 
-    output_file = "./output/demographic_parity_" + args.method + ".json"
+    output_file = "./output/demographic_parity_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(demographic_parity), f, indent=2)
 
-    output_file = "./output/CTF_" + args.method + ".json"
+    output_file = "./output/CTF_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(CTF), f, indent=2)
     # ===================================================#
@@ -225,15 +227,15 @@ def measure_bias_metrics(model, tokenizer, args):
         + accuracy_opposite_gender["before_bias_reduction"]
     )
 
-    output_file = "./output/accuracy_overall_" + args.method + ".json"
+    output_file = "./output/accuracy_overall_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_overall), f, indent=2)
 
-    output_file = "./output/accuracy_original_gender_" + args.method + ".json"
+    output_file = "./output/accuracy_original_gender_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_original_gender), f, indent=2)
 
-    output_file = "./output/accuracy_opposite_gender_" + args.method + ".json"
+    output_file = "./output/accuracy_opposite_gender_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(accuracy_opposite_gender), f, indent=2)
     # ===================================================#
@@ -310,11 +312,11 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     TNR["before_bias_reduction"] = 1 - torch.mean(torch.from_numpy(y_pred).double())
 
-    output_file = "./output/equality_of_opportunity_y_equal_0_" + args.method + ".json"
+    output_file = "./output/equality_of_opportunity_y_equal_0_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_opportunity_y_equal_0), f, indent=2)
 
-    output_file = "./output/TNR_" + args.method + ".json"
+    output_file = "./output/TNR_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(TNR), f, indent=2)
 
@@ -392,11 +394,11 @@ def measure_bias_metrics(model, tokenizer, args):
     )
     TPR["before_bias_reduction"] = torch.mean(torch.from_numpy(y_pred).double())
 
-    output_file = "./output/equality_of_opportunity_y_equal_1_" + args.method + ".json"
+    output_file = "./output/equality_of_opportunity_y_equal_1_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_opportunity_y_equal_1), f, indent=2)
 
-    output_file = "./output/TPR_" + args.method + ".json"
+    output_file = "./output/TPR_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(TPR), f, indent=2)
     # ===================================================#
@@ -410,28 +412,34 @@ def measure_bias_metrics(model, tokenizer, args):
         equality_of_opportunity_y_equal_0["before_bias_reduction"]
         + equality_of_opportunity_y_equal_1["before_bias_reduction"]
     )
-    output_file = "./output/equality_of_odds_" + args.method + ".json"
+    output_file = "./output/equality_of_odds_" + args.method + + "_" + args.approach + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(equality_of_odds), f, indent=2)
     # ===================================================#
 
 
 # Some of the following parts are taken from https://towardsdatascience.com/fine-tuning-pretrained-nlp-models-with-huggingfaces-trainer-6326a4456e7b by Vincent Tan
-def train_classifier(args):
+def train_classifier(args,data_augmentation_flag=None):
     """
-    Train a classifier to be used as our starting point for polcy gradient. We can either train from scratch or load a pretrained model depending on the user's choice.
+    Train a classifier to be used as our starting point for polcy gradient.
+    We can either train from scratch or load a pretrained model depending on
+    the user's choice.
     args:
         args: the arguments given by the user
+        data_augmentation_flag: a flag to choose whether or not to apply data
+        augmentation, meaning that the number of examples doubles because we
+        flip the gender in each example and add it as a new example.
     returns:
-        model: the model that is going to be our starting point for policy gradient
-        tokenizer: the tokenizer used before giving the sentences to the classifier model
+        model: the model that is going to be our starting point for policy
+        gradient
+        tokenizer: the tokenizer used before giving the sentences to the
+        classifier model
     """
-    # Read data
-    data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
-    data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
+    # Load the dataset
+    train_dataset, val_dataset, test_dataset = data_loader(args,apply_data_augmentation=data_augmentation_flag)
     # The number of epochs afterwhich we save the model. We set it to this value to only save the last model.
     checkpoint_steps = (
-        int(len(data_train) / args.batch_size_classifier) * args.num_epochs_classifier
+        int(train_dataset.__len__()/ args.batch_size_classifier) * args.num_epochs_classifier
     )
 
     if args.load_pretrained_classifier:
@@ -439,7 +447,7 @@ def train_classifier(args):
         tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
         model = BertForSequenceClassification.from_pretrained(
             args.model_path + str(checkpoint_steps),
-            num_labels=len(data_train.Class.unique()),
+            num_labels=len(set(train_dataset.labels)),
             output_attentions=True,
         )
 
@@ -449,12 +457,10 @@ def train_classifier(args):
         tokenizer = BertTokenizer.from_pretrained(model_name)
         model = BertForSequenceClassification.from_pretrained(
             model_name,
-            num_labels=len(data_train[data_train.columns[1]].unique()),
+            num_labels=len(set(train_dataset.labels)),
             output_attentions=True,
         )
 
-        # Load the dataset
-        train_dataset, val_dataset, test_dataset = data_loader(args)
 
         # Define Trainer parameters
 
