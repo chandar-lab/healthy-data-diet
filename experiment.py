@@ -32,12 +32,11 @@ def training_epoch(
         train_dataset: the training data object
     returns:
         loss (torch.tensor): the training epoch loss
-        model: the pretrained classifier
     """
     logs = dict()
     model.train()
     compute_gradient = True
-    epoch_bias, epoch_accuracy, epoch_reward, loss, model = epoch_loss(
+    epoch_bias, epoch_accuracy, epoch_reward, loss = epoch_loss(
         epoch,
         args,
         optimizer,
@@ -63,7 +62,7 @@ def training_epoch(
     logs["epoch"] = epoch + 1
     wandb.log(logs)
 
-    return loss, model
+    return loss
 
 
 def validation_epoch(
@@ -83,22 +82,20 @@ def validation_epoch(
         args: the arguments given by the user
         optimizer: the optimizer used to minize the loss
         device: the current device (cpu or gpu)
-        tokenizer: the tokenizer used before giving the sentences to the 
-        classifier
+        tokenizer: the tokenizer used before giving the sentences to the classifier
         model: the pretrained classifier
         best_validation_reward: the best validation reward that we use for model
         selection
         val_dataset: the validation data object
     returns:
         loss (torch.tensor): the validation epoch loss
-        model: the pretrained classifier
     """
     logs = dict()
     model.eval()
     compute_gradient = False
 
     with torch.no_grad():
-        epoch_bias, epoch_accuracy, epoch_reward, loss, model = epoch_loss(
+        epoch_bias, epoch_accuracy, epoch_reward, loss = epoch_loss(
             epoch,
             args,
             optimizer,
@@ -124,8 +121,8 @@ def validation_epoch(
         logs["epoch"] = epoch + 1
         wandb.log(logs)
 
-        # if the developmenet accuracy is better than the best developement reward,
-        #we save the model weights.
+        # if the developmenet accuracy is better than the best developement
+        #reward, we save the model weights.
         if (epoch_accuracy - epoch_bias) > best_validation_reward:
             best_validation_reward = epoch_accuracy - epoch_bias
             torch.save(
@@ -133,7 +130,7 @@ def validation_epoch(
                 "./saved_models/" + args.classifier_model + "_debiased_best.pt",
             )
 
-    return loss, best_validation_reward, model
+    return loss, best_validation_reward
 
 
 def test_epoch(
@@ -157,13 +154,12 @@ def test_epoch(
         test_dataset: the test data object
     returns:
         loss (torch.tensor): the test epoch loss
-        model: the pretrained classifier
     """
     model.eval()
     compute_gradient = False
 
     with torch.no_grad():
-        epoch_bias, epoch_accuracy, epoch_reward, loss, model = epoch_loss(
+        epoch_bias, epoch_accuracy, epoch_reward, loss = epoch_loss(
             epoch,
             args,
             optimizer,
@@ -174,7 +170,7 @@ def test_epoch(
             compute_gradient,
         )
 
-    return loss, epoch_accuracy, model
+    return loss, epoch_accuracy
 
 
 def epoch_loss(
@@ -194,24 +190,24 @@ def epoch_loss(
         args: the arguments given by the user
         optimizer: the optimizer used to minize the loss
         device: the current device (cpu or gpu)
-        tokenizer: the tokenizer used before giving the sentences to the classifier
+        tokenizer: the tokenizer used before giving the sentences to the
+        classifier
         model: the pretrained classifier
         data: the training/validation/test data objects
-        compute_gradient: a boolean that indicates whether or not we should compute
-        the gradient of the loss
+        compute_gradient: a boolean that indicates whether or not we should
+        compute the gradient of the loss
     returns:
-        epoch_bias: the epoch average bias, which is the l2 norm of the difference
-        between the logits of the model due to 2 sources. The first source is gender
-        bias, which we measure by flipping the gender and taking the norm of the 
-        difference in the logits before and after gender flipping. The second 
-        source is unintended correlationm which we measure by praphrasing the 
-        sentence and also taking the norm of the differenc between the logits 
-        before and after paraphrasing.
+        epoch_bias: the epoch average bias, which is the l2 norm of the
+        difference between the logits of the model due to 2 sources. The first
+        source is gender bias, which we measure by flipping the gender and taking
+        the norm of the difference in the logits before and after gender flipping.
+        The second source is unintended correlationm which we measure by
+        praphrasing the sentence and also taking the norm of the differenc
+        between the logits before and after paraphrasing.
         epoch_accuracy: the epoch average accuracy
-        epoch_reward: the average epoch reward due to both accuracy and bias, 
+        epoch_reward: the average epoch reward due to both accuracy and bias,
         which computed as (bias_reward + lambda * accuracy_reward)
         loss: the  epoch loss
-        model: the pretrained classifier
     """
     epoch_bias = torch.tensor(0.0).to(device)
     epoch_accuracy = torch.tensor(0.0).to(device)
@@ -279,7 +275,7 @@ def epoch_loss(
                 dataset.encodings_gender_swap["input_ids"]
             ):
                 # We can only compute the bias if the number of examples in data
-                # and data_gender_swap is the same
+                #and data_gender_swap is the same
                 if args.norm == "l1":
                     reward_bias = -args.lambda_gender * torch.norm(
                         results_original_gender - results_gender_swap, dim=1, p=1
@@ -299,9 +295,9 @@ def epoch_loss(
                     )
 
             else:
-                # If the nummber of examples in data and data_gender_swap is 
-                #different, we set the bias to an arbitrary value of -1, meaning
-                #that we cant compute the bias.
+                # If the nummber of examples in data and data_gender_swap is
+                #different, we set the bias to an arbitrary value of -1,
+                #meaning that we cant compute the bias.
                 reward_bias = torch.tensor(-1).to(device)
 
             rewards_bias.append(torch.tensor(reward_bias))
@@ -349,7 +345,7 @@ def epoch_loss(
                 if args.norm == "l1":
                     bias = args.lambda_gender * torch.norm(
                         results_original_gender - results_gender_swap, dim=1, p=1
-                    ).to(device) - args.lambda_data * torch.norm(
+                    ).to(device) + args.lambda_data * torch.norm(
                         results_original_gender - results_pharaphrasing, dim=1, p=1
                     ).to(
                         device
@@ -358,16 +354,16 @@ def epoch_loss(
                 elif args.norm == "l2":
                     bias = args.lambda_gender * torch.norm(
                         results_original_gender - results_gender_swap, dim=1, p=2
-                    ).to(device) - args.lambda_data * torch.norm(
+                    ).to(device) + args.lambda_data * torch.norm(
                         results_original_gender - results_pharaphrasing, dim=1, p=2
                     ).to(
                         device
                     )
 
             else:
-                # If the nummber of examples in data and data_gender_swap is 
-                #different, we set the bias to an arbitrary value of -1, meaning
-                #that we cant compute the bias.
+                # If the nummber of examples in data and data_gender_swap is
+                #different, we set the bias to an arbitrary value of -1,
+                #meaning that we cant compute the bias.
                 bias = torch.tensor(-1).to(device)
 
             batch_bias.append(torch.tensor(bias))
@@ -380,7 +376,8 @@ def epoch_loss(
 
             if args.method == "baseline_forgettable_examples":
               # This baseline method fine-tunes based only on cross entropy,
-              #without the additional term for the loss due to bias term (unlike ours).
+              # without the additional term for the loss due to bias term
+              #(unlike ours).
               targets = torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]).to(device) 
               loss = (criterion(results_original_gender.contiguous().view(-1, output_dim), targets.contiguous().view(-1),))            
             elif args.method == "baseline_mind_the_tradeoff":
@@ -398,7 +395,7 @@ def epoch_loss(
             loss.backward()
             optimizer.step()
 
-    return epoch_bias, epoch_accuracy, epoch_reward, loss, model
+    return epoch_bias, epoch_accuracy, epoch_reward, loss
 
 
 def run_experiment(args):
@@ -406,16 +403,16 @@ def run_experiment(args):
     Run the experiment by passing over the training and validation data to
     fine-tune the pretrained model.
     Compute the test accuracy on the whole test set.
-    Compute the test accuracy on the majority and majority groups of the test data.
-    The majority groups refers to the set of examples where relying on the 
-    unintended correlation helps, whereas the minority group represens the set 
-    of exmaple where relying on unintended correlation hurts the performance.
+    Compute the test accuracy on the majority and majority groups of the test
+    data. The majority groups refers to the set of examples where relying on
+    the unintended correlation helps, whereas the minority group represens the
+    set of exmaple where relying on unintended correlation hurts the performance.
     Save the text accuracy in json files.
     args:
         args: the arguments given by the user
     returns:
-        model: the model after updating its weights based on the policy gradient
-        algorithm.
+        model: the model after updating its weights based on the policy
+        gradient algorithm.
         tokenizer: the tokenizer used before giving the sentences to the classifier
     """
     wandb.init(
@@ -441,7 +438,7 @@ def run_experiment(args):
 
     best_validation_reward = torch.tensor(-float("inf")).to(device)
     for epoch in range(args.num_epochs):
-        training_loss, model = training_epoch(
+        training_loss = training_epoch(
             epoch,
             args,
             optimizer,
@@ -450,7 +447,7 @@ def run_experiment(args):
             model,
             train_dataset,
         )
-        validation_loss, best_validation_reward, model = validation_epoch(
+        validation_loss, best_validation_reward = validation_epoch(
             epoch,
             args,
             optimizer,
@@ -478,9 +475,9 @@ def run_experiment(args):
         )
     )
 
-    # Compute the test accuracy and loss using the model with the highest 
+    # Compute the test accuracy and loss using the model with the highest
     #validation accuracy
-    test_loss, test_accuracy, model = test_epoch(
+    test_loss, test_accuracy = test_epoch(
         epoch,
         args,
         optimizer,
@@ -502,16 +499,15 @@ def run_experiment(args):
     if args.compute_majority_and_minority_accuracy:
         # Compute the test accuracy on the majority and majority groups of the
         #test data.
-        
-        # The majority groups refers to the set of examples where relying on the
-        #unintended correlation improves the performance, whereas the minority
-        #group represents the set of exmaples where relying on unintended
-        #correlation hurts the performance.
+        # The majority groups refers to the set of examples where relying on
+        #the unintended correlation improves the performance, whereas the
+        # minority group represents the set of exmaples where relying on
+        #unintended correlation hurts the performance.
         
         # Load the dataset
         _, _, test_dataset_majority = data_loader(args, subset="majority")
         _, _, test_dataset_minority = data_loader(args, subset="minority")
-        _, test_accuracy_majority, model = test_epoch(
+        _, test_accuracy_majority = test_epoch(
             epoch,
             args,
             optimizer,
@@ -521,8 +517,8 @@ def run_experiment(args):
             test_dataset_majority,
         )
 
-        # Divide the test_accuracy_majority of all the batches by the number of
-        #batches that we have
+        # Divide the test_accuracy_majority of all the batches by the number
+        #of batches that we have
         test_accuracy_majority = test_accuracy_majority / (
             test_dataset_majority.__len__() / args.batch_size
         )
@@ -532,7 +528,7 @@ def run_experiment(args):
         with open(output_file, "w+") as f:
             json.dump(str(test_accuracy_majority), f, indent=2)
 
-        _, test_accuracy_minority, model = test_epoch(
+        _, test_accuracy_minority = test_epoch(
             epoch,
             args,
             optimizer,
