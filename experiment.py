@@ -213,6 +213,12 @@ def epoch_loss(
     epoch_reward = torch.tensor(0.0).to(device)
     criterion = nn.CrossEntropyLoss()
 
+    # The distance metric that we use to compute the bias
+    if args.norm == "l1":
+      norm_p_value = 1
+    elif args.norm == "l2":
+      norm_p_value = 2
+
     for i in range(int(np.ceil(dataset.__len__() / args.batch_size))):
 
         results_original_gender = model.forward(
@@ -277,18 +283,9 @@ def epoch_loss(
                 #and data_gender_swap is the same
                 if args.norm == "l1":
                     reward_bias = -args.lambda_gender * torch.norm(
-                        results_original_gender - results_gender_swap, dim=1, p=1
+                        results_original_gender - results_gender_swap, dim=1, p= norm_p_value
                     ).to(device) - args.lambda_data * torch.norm(
-                        results_original_gender - results_pharaphrasing, dim=1, p=1
-                    ).to(
-                        device
-                    )
-
-                elif args.norm == "l2":
-                    reward_bias = -args.lambda_gender * torch.norm(
-                        results_original_gender - results_gender_swap, dim=1, p=2
-                    ).to(device) - args.lambda_data * torch.norm(
-                        results_original_gender - results_pharaphrasing, dim=1, p=2
+                        results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
                     ).to(
                         device
                     )
@@ -343,22 +340,12 @@ def epoch_loss(
                 #and data_gender_swap is the same
                 if args.norm == "l1":
                     bias = args.lambda_gender * torch.norm(
-                        results_original_gender - results_gender_swap, dim=1, p=1
+                        results_original_gender - results_gender_swap, dim=1, p= norm_p_value
                     ).to(device) + args.lambda_data * torch.norm(
-                        results_original_gender - results_pharaphrasing, dim=1, p=1
+                        results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value
                     ).to(
                         device
                     )
-
-                elif args.norm == "l2":
-                    bias = args.lambda_gender * torch.norm(
-                        results_original_gender - results_gender_swap, dim=1, p=2
-                    ).to(device) + args.lambda_data * torch.norm(
-                        results_original_gender - results_pharaphrasing, dim=1, p=2
-                    ).to(
-                        device
-                    )
-
             else:
                 # If the nummber of examples in data and data_gender_swap is
                 #different, we set the bias to an arbitrary value of -1,
@@ -549,3 +536,4 @@ def run_experiment(args):
             json.dump(str(test_accuracy_minority), f, indent=2)
 
     return model, tokenizer
+
