@@ -7,6 +7,8 @@ import torch
 import json
 import numpy as np
 import pandas as pd
+from torch.distributions.kl import kl_divergence
+from torch.distributions.categorical import Categorical
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -15,31 +17,19 @@ def measure_bias_metrics(model_after_bias_reduction, dataset, args):
     Compute metrics that measure the bias before and after applying our
     de-biasing algorithm.
     The metrics that we compute are the following:
-    1) Demagraphic parity
-    2) Equality of odds
-    3) Counterfactual token fairness
-    4) True negative rate
-    5) True positive rate
-    6) Accuracy for both the original and opposite gender (each separately
-    and combined)
-    7) Equality of opportunity
+    1) Independence
+    2) Seprataion
+    3) Sufficiency
     args:
+        model_after_bias_reduction: the model after updating its weights based for bias reduction
+        dataset: the dataset on which the metrics are measured, which is the validation dataset
         args: the arguments given by the user
-        model: the model after updating its weights based on the policy gradient
-        algorithm.
-        tokenizer: the tokenizer used before giving the sentences to the classifier
     returns:
         the function doesnt return anything, since all the metrics are saved
         in json files.
     """
-    demographic_parity = {}
-    
-    y_pred_after_bias_reduction = {}
-    y_pred_before_bias_reduction = {}
-    
-    y_pred_opposite_gender_after_bias_reduction = {}
-    y_pred_opposite_gender_before_bias_reduction = {}
-    
+    independence = {}
+
     checkpoint_steps = (
         int(
             len(pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv"))
@@ -52,10 +42,18 @@ def measure_bias_metrics(model_after_bias_reduction, dataset, args):
     model_path = "./saved_models/checkpoint-" + str(checkpoint_steps)
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
         model_path, num_labels=len(set(dataset.labels)), output_attentions=True
-    )    
+    ).to(device)      
+    
+    num_labels = len(set(dataset.labels))
+    # We create empy numpy arrays which will contain the predictions of the model
+    y_pred_original_gender_after_bias_reduction =  np.ones([0,num_labels])
+    y_pred_original_gender_before_bias_reduction =  np.ones([0,num_labels])
+    
+    y_pred_opposite_gender_after_bias_reduction =  np.ones([0,num_labels])
+    y_pred_opposite_gender_before_bias_reduction =  np.ones([0,num_labels])
     
 
-    for i in range(int(np.ceil(dataset.__len__() / args.batch_size))):
+    for i in range(int(np.ceil(len(dataset) / args.batch_size))):
 
         results_original_gender_after_bias_reduction = model_after_bias_reduction.forward(
             input_ids=torch.tensor(
@@ -91,7 +89,7 @@ def measure_bias_metrics(model_after_bias_reduction, dataset, args):
                 ]
             ).to(device),
         )[0]
-        
+
         results_original_gender_before_bias_reduction = model_before_bias_reduction.forward(
             input_ids=torch.tensor(
                 dataset.encodings["input_ids"][
@@ -126,27 +124,71 @@ def measure_bias_metrics(model_after_bias_reduction, dataset, args):
                 ]
             ).to(device),
         )[0]        
-        
-        y_pred_after_bias_reduction.append(results_original_gender_after_bias_reduction)
-        y_pred_opposite_gender_after_bias_reduction.append(results_gender_swap_after_bias_reduction)
+               
+        # Get the predictions of the new batch
+        batch_original_gender = results_original_gender_after_bias_reduction.cpu().detach().numpy()
+        # Add them to the total predictions
+        y_pred_original_gender_after_bias_reduction = np.concatenate((y_pred_original_gender_after_bias_reduction, batch_original_gender), axis=0)
 
-        y_pred_before_bias_reduction.append(results_original_gender_before_bias_reduction)
-        y_pred_opposite_gender_before_bias_reduction.append(results_gender_swap_before_bias_reduction)        
-        
-    demographic_parity["after_bias_reduction"] = 1 - torch.abs(
-        torch.mean(y_pred_after_bias_reduction.double())
-        - torch.mean(y_pred_opposite_gender_after_bias_reduction.double())
-    )    
+        # Do the same for the sentences after gender swapping
+        batch_gender_swap = results_gender_swap_after_bias_reduction.cpu().detach().numpy()
+        y_pred_opposite_gender_after_bias_reduction = np.concatenate((y_pred_opposite_gender_after_bias_reduction, batch_gender_swap), axis=0)        
+  
+        # Get the predictions of the new batch
+        batch_original_gender = results_original_gender_before_bias_reduction.cpu().detach().numpy()
+        # Add them to the total predictions
+        y_pred_original_gender_before_bias_reduction = np.concatenate((y_pred_original_gender_before_bias_reduction, batch_original_gender), axis=0)
+
+        # Do the same for the sentences after gender swapping
+        batch_gender_swap = results_gender_swap_before_bias_reduction.cpu().detach().numpy()
+        y_pred_opposite_gender_before_bias_reduction = np.concatenate((y_pred_opposite_gender_before_bias_reduction, batch_gender_swap), axis=0)            
+
+    # We also compute the predictions for the model on both genders
+    y_pred_both_genders_after_bias_reduction = np.concatenate((y_pred_original_gender_after_bias_reduction, y_pred_opposite_gender_after_bias_reduction), axis=0)            
+    y_pred_both_genders_before_bias_reduction = np.concatenate((y_pred_original_gender_before_bias_reduction, y_pred_opposite_gender_before_bias_reduction), axis=0)            
+
+    # We need to calculate the probability of occurence of different labels in different cases (with and
+    # without gender flipping, as well as before and after bias reduction)
+    probs_original_gender_after_bias_reduction=torch.ones([num_labels])
+    probs_opposite_gender_after_bias_reduction=torch.ones([num_labels])
+    probs_both_genders_after_bias_reduction=torch.ones([num_labels])
+    probs_original_gender_before_bias_reduction=torch.ones([num_labels])
+    probs_opposite_gender_before_bias_reduction=torch.ones([num_labels])
+    probs_both_genders_before_bias_reduction=torch.ones([num_labels])
+
+    # We calculate the counts, then divide by the total number of elements to get the probability
+    _, counts = np.unique(np.argmax(y_pred_original_gender_after_bias_reduction,axis = 1), return_counts=True)
+    probs_original_gender_after_bias_reduction = counts/len(y_pred_original_gender_after_bias_reduction)
+
+    _, counts = np.unique(np.argmax(y_pred_opposite_gender_after_bias_reduction,axis = 1), return_counts=True)
+    probs_opposite_gender_after_bias_reduction = counts/len(y_pred_opposite_gender_after_bias_reduction)
+
+    _, counts = np.unique(np.argmax(y_pred_both_genders_after_bias_reduction,axis = 1), return_counts=True)
+    probs_both_genders_after_bias_reduction = counts/len(y_pred_both_genders_after_bias_reduction)
+
+    _, counts = np.unique(np.argmax(y_pred_original_gender_before_bias_reduction,axis = 1), return_counts=True)
+    probs_original_gender_before_bias_reduction = counts/len(y_pred_original_gender_before_bias_reduction)
+
+    _, counts = np.unique(np.argmax(y_pred_opposite_gender_before_bias_reduction,axis = 1), return_counts=True)
+    probs_opposite_gender_before_bias_reduction = counts/len(y_pred_opposite_gender_before_bias_reduction)
+
+    _, counts = np.unique(np.argmax(y_pred_both_genders_before_bias_reduction,axis = 1), return_counts=True)
+    probs_both_genders_before_bias_reduction = counts/len(y_pred_both_genders_before_bias_reduction)                   
+
+
+    # The kl divergence is the average between the kl div with and without gender flipping (more details in https://guide.allennlp.org/fairness#2)
+    kl_div_1 = kl_divergence(Categorical(torch.from_numpy(probs_original_gender_after_bias_reduction)), Categorical(torch.from_numpy(probs_both_genders_after_bias_reduction)))
+    kl_div_2 = kl_divergence(Categorical(torch.from_numpy(probs_opposite_gender_after_bias_reduction)), Categorical(torch.from_numpy(probs_both_genders_after_bias_reduction)))
+    independence["after_bias_reduction"] = 0.5 * (kl_div_1 + kl_div_2)
     
-        
-    demographic_parity["before_bias_reduction"] = 1 - torch.abs(
-        torch.mean(y_pred_before_bias_reduction.double())
-        - torch.mean(y_pred_opposite_gender_before_bias_reduction.double())
-    )        
+    # we repeat the same procedure for the model before bias reduction
+    kl_div_1 = kl_divergence(Categorical(torch.from_numpy(probs_original_gender_before_bias_reduction)), Categorical(torch.from_numpy(probs_both_genders_before_bias_reduction)))
+    kl_div_2 = kl_divergence(Categorical(torch.from_numpy(probs_opposite_gender_before_bias_reduction)), Categorical(torch.from_numpy(probs_both_genders_before_bias_reduction)))
+    independence["before_bias_reduction"] = 0.5 * (kl_div_1 + kl_div_2)
     
-    output_file = "./output/demographic_parity_" + args.method + + "_" + args.approach + + "_" + args.dataset + ".json"
+    output_file = "./output/independence_" + args.method + "_" + args.approach + "_" + args.dataset + ".json"
     with open(output_file, "w+") as f:
-        json.dump(str(demographic_parity), f, indent=2)    
+        json.dump(str(independence), f, indent=2)    
     
 
 
@@ -234,18 +276,3 @@ def measure_performance_metrics(p):
 
     return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
 
-
-# Create torch dataset
-class Dataset(torch.utils.data.Dataset):
-    def __init__(self, encodings, labels=None):
-        self.encodings = encodings
-        self.labels = labels
-
-    def __getitem__(self, idx):
-        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
-        if self.labels:
-            item["labels"] = torch.tensor(self.labels[idx])
-        return item
-
-    def __len__(self):
-        return len(self.encodings["input_ids"])
