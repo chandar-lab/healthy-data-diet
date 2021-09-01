@@ -5,11 +5,12 @@ import torch
 # Create torch dataset
 class Dataset(torch.utils.data.Dataset):
     def __init__(
-        self, encodings, encodings_gender_swap, encodings_paraphrasing, labels=None
+        self, encodings, encodings_gender_swap, encodings_paraphrasing, gender_swap, labels=None
     ):
         self.encodings = encodings
         self.encodings_gender_swap = encodings_gender_swap
         self.encodings_paraphrasing = encodings_paraphrasing
+        self.gender_swap = gender_swap
         self.labels = labels
 
     def __getitem__(self, idx):
@@ -56,6 +57,11 @@ def data_loader(args, subset=None, apply_data_augmentation = None):
     data_test_gender_swap = pd.read_csv(
         "./data/" + args.dataset + "_test_gender_swap.csv"
     )
+
+    # This is a boolean tensor that indentifies the examples that have undergone gender swapping
+    train_gender_swap = torch.tensor(data_train [data_train.columns[0]] != data_train_gender_swap[data_train_gender_swap.columns[0]])
+    valid_gender_swap = torch.tensor(data_valid [data_valid.columns[0]] != data_valid_gender_swap[data_valid_gender_swap.columns[0]])
+    test_gender_swap = torch.tensor(data_test [data_test.columns[0]] != data_test_gender_swap[data_test_gender_swap.columns[0]])
     
     # The paraphrasing means that we each sentence in a different way, while
     # preserving the meaning. For example, the sentence "I really liked the movie"
@@ -69,7 +75,7 @@ def data_loader(args, subset=None, apply_data_augmentation = None):
         data_train = pd.concat(
             [data_train, data_train_gender_swap], axis=0, ignore_index=True
         )
-    
+        
     if subset == "majority":
         data_test = data_test[data_test["majority"] == True]
         data_test_gender_swap = data_test_gender_swap[
@@ -156,15 +162,17 @@ def data_loader(args, subset=None, apply_data_augmentation = None):
         X_train_tokenized,
         X_train_gender_swap_tokenized,
         X_train_paraphrased_tokenized,
+        train_gender_swap,
         y_train,
     )
     val_dataset = Dataset(
-        X_val_tokenized, X_val_gender_swap_tokenized, X_val_paraphrased_tokenized, y_val
+        X_val_tokenized, X_val_gender_swap_tokenized, X_val_paraphrased_tokenized, valid_gender_swap, y_val
     )
     test_dataset = Dataset(
         X_test_tokenized,
         X_test_gender_swap_tokenized,
         X_test_paraphrased_tokenized,
+        test_gender_swap,
         y_test,
     )
 
