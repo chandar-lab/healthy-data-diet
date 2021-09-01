@@ -17,6 +17,8 @@ def parse_args():
         default="ours",
         help="Choosing between our work and some of the baseline methods",
     )
+    parser.add_argument('--num_runs', type=int, default=5,
+                        help='Number of runs to do.')    
     parser.add_argument(
         "--approach",
         choices=["policy_gradient", "supervised_learning"],
@@ -127,29 +129,32 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.method == "ours":
-        # Measure the performance of our model
-        model, tokenizer = run_experiment(args)
-        _, val_dataset, _ = data_loader(args)
-        measure_bias_metrics(model, val_dataset, args)
+    for run in range(args.num_runs):
+      if args.method == "ours":
+          # Measure the performance of our model
+          model, tokenizer = run_experiment(args,run)
+          _, val_dataset, _ = data_loader(args)
+          measure_bias_metrics(model, val_dataset, args,run)
 
-    elif args.method == "baseline_data_augmentation":
-        # Measure the perfrmance of the first baseline, which is increases the
-        #size of the dataset by gender flipping (data augmentation)
-        model, tokenizer = train_classifier(args, data_augmentation_flag=True)
-        _, val_dataset, _ = data_loader(args)
-        measure_bias_metrics(model, val_dataset, args)
+      elif args.method == "baseline_data_augmentation":
+          # Measure the perfrmance of the first baseline, which is increases the
+          #size of the dataset by gender flipping (data augmentation)
+          model, tokenizer = train_classifier(args, data_augmentation_flag=True)
+          _, val_dataset, _ = data_loader(args)
+          measure_bias_metrics(model, val_dataset, args,run)
 
-    elif args.method == "baseline_forgettable_examples":
-        # Measure the perfrmance of the second baseline, which is explained here
-        #https://arxiv.org/pdf/1911.03861.pdf. We have to set the args.approach to "supervised_learning", because that's how the paper implements it.
-        model, tokenizer = run_experiment(args)
-        _, val_dataset, _ = data_loader(args)
-        measure_bias_metrics(model, val_dataset, args)
+      elif args.method == "baseline_forgettable_examples":
+          # Measure the perfrmance of the second baseline, which is explained here
+          #https://arxiv.org/pdf/1911.03861.pdf. We have to set the args.approach
+          # to "supervised_learning", because that's how the paper implements it.
+          model, tokenizer = run_experiment(args,run)
+          _, val_dataset, _ = data_loader(args)
+          measure_bias_metrics(model, val_dataset, args,run)
 
-    elif args.method == "baseline_mind_the_tradeoff":
-        # Measure the perfrmance of the third baseline, which is explained here
-        #https://arxiv.org/pdf/2005.00315.pdf. We have to set the args.approach to "supervised_learning", because that's how the paper implements it.
-        model, tokenizer = run_experiment(args)
-        _, val_dataset, _ = data_loader(args)
-        measure_bias_metrics(model, val_dataset, args)
+      elif args.method == "baseline_mind_the_tradeoff":
+          # Measure the perfrmance of the third baseline, which is explained here
+          #https://arxiv.org/pdf/2005.00315.pdf. We have to set the args.approach
+          # to "supervised_learning", because that's how the paper implements it.
+          model, tokenizer = run_experiment(args,run)
+          _, val_dataset, _ = data_loader(args)
+          measure_bias_metrics(model, val_dataset, args,run)
