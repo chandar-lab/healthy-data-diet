@@ -115,7 +115,7 @@ def validation_epoch(
             best_validation_reward = epoch_accuracy - epoch_bias
             torch.save(
                 model.state_dict(),
-                "./saved_models/" + args.classifier_model + "_debiased_best.pt",
+                "./saved_models/" + args.classifier_model + "_" + args.method + "_" + args.approach + "_" + args.dataset + "_debiased_best.pt",
             )
 
     return loss, best_validation_reward
@@ -209,7 +209,7 @@ def epoch_loss(
         norm_p_value = 2
 
     for i in range(int(np.ceil(len(dataset) / args.batch_size))):
-
+        
         results_original_gender = model.forward(
             input_ids=torch.tensor(
                 dataset.encodings["input_ids"][
@@ -320,27 +320,27 @@ def epoch_loss(
 
             batch_accuracy.append(accuracy)
 
-            if len(dataset.encodings["input_ids"]) == len(
-                dataset.encodings_gender_swap["input_ids"]
-            ):
-                # We can only compute the bias if the number of examples in data
-                #and data_gender_swap is the same
-                bias_gender = args.lambda_gender * torch.norm(
-                    results_original_gender - results_gender_swap, dim=1, p= norm_p_value
-                ).to(device)
-                bias_data = args.lambda_data * torch.norm(
-                    results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value).to(device)
-                bias = bias_gender + bias_data
+            if(args.method == "ours"):
+              if len(dataset.encodings["input_ids"]) == len(
+                  dataset.encodings_gender_swap["input_ids"]
+              ):
+                  # We can only compute the bias if the number of examples in data
+                  #and data_gender_swap is the same
+                  bias_gender = args.lambda_gender * torch.norm(
+                      results_original_gender - results_gender_swap, dim=1, p= norm_p_value
+                  ).to(device)
+                  bias_data = args.lambda_data * torch.norm(
+                      results_original_gender - results_pharaphrasing, dim=1, p= norm_p_value).to(device)
+                  bias = bias_gender + bias_data
 
-            else:
-                # If the nummber of examples in data and data_gender_swap is
-                #different, we set the bias to an arbitrary value of -1,
-                #meaning that we cant compute the bias.
-                bias = torch.tensor(-1).to(device)
+              else:
+                  # If the nummber of examples in data and data_gender_swap is
+                  #different, we set the bias to an arbitrary value of -1,
+                  #meaning that we cant compute the bias.
+                  bias = torch.tensor(-1).to(device)
+              batch_bias.append(torch.tensor(bias))
+              epoch_bias += torch.sum(torch.stack(batch_bias)) / args.batch_size
 
-            batch_bias.append(torch.tensor(bias))
-
-            epoch_bias += torch.sum(torch.stack(batch_bias)) / args.batch_size
             epoch_accuracy += torch.sum(torch.stack(batch_accuracy)) / args.batch_size
 
 
@@ -378,7 +378,7 @@ def epoch_loss(
     return epoch_bias, epoch_accuracy, epoch_reward, loss
 
 
-def run_experiment(args):
+def run_experiment(args,run):
     """
     Run the experiment by passing over the training and validation data to
     fine-tune the pretrained model.
@@ -390,16 +390,15 @@ def run_experiment(args):
     Save the text accuracy in json files.
     args:
         args: the arguments given by the user
+        run : the index of the current run, that goes from 0 to the number of runs defined by the user
     returns:
         model: the model after updating its weights based on the policy
         gradient algorithm.
         tokenizer: the tokenizer used before giving the sentences to the classifier
     """
     wandb.init(
-        name=str(args.dataset) + " using " + str(args.norm) + " distance",
-        project="reducing gender bias in "
-        + str(args.dataset)
-        + " using policy gradient",
+        name=str(args.dataset) + "_run_" + str(run),
+        project="reducing gender bias",
         config=args,
     )
     # Define pretrained tokenizer and mode
@@ -440,17 +439,13 @@ def run_experiment(args):
         if epoch < args.num_saved_debiased_models:
             torch.save(
                 model.state_dict(),
-                "./saved_models/"
-                + args.classifier_model
-                + "_debiased_epoch_"
-                + str(epoch)
-                + ".pt",
+                "./saved_models/" + args.classifier_model + "_" + args.method + "_" + args.approach + "_" + args.dataset + "_debiased_epoch_" + str(epoch)+ ".pt",
             )
 
     # Load the model that has the best performance on the validation data
     model.load_state_dict(
         torch.load(
-            "./saved_models/" + args.classifier_model + "_debiased_best.pt",
+            "./saved_models/" + args.classifier_model + "_" + args.method + "_" + args.approach + "_" + args.dataset + "_debiased_best.pt",
             map_location=device,
         )
     )
@@ -467,12 +462,8 @@ def run_experiment(args):
         test_dataset,
     )
 
-    # Divide the test accuracy over all the batches by the number of batches
-    #that we have
-    test_accuracy = test_accuracy / (test_dataset.__len__() / args.batch_size)
-
     # Save the test accuracy
-    output_file = "./output/test_accuracy.json"
+    output_file = "./output/test_accuracy_" + args.method + "_" + args.approach + "_" + args.dataset + "_run_" + str(run+1) + ".json"
     with open(output_file, "w+") as f:
         json.dump(str(test_accuracy), f, indent=2)
 
@@ -497,14 +488,8 @@ def run_experiment(args):
             test_dataset_majority,
         )
 
-        # Divide the test_accuracy_majority of all the batches by the number
-        #of batches that we have
-        test_accuracy_majority = test_accuracy_majority / (
-            test_dataset_majority.__len__() / args.batch_size
-        )
-
         # Save the test accuracy on the majority group in the test data
-        output_file = "./output/test_accuracy_majority.json"
+        output_file = "./output/test_accuracy_majority_"  + args.method + "_" + args.approach + "_" + args.dataset + "_run_" + str(run+1) + ".json"
         with open(output_file, "w+") as f:
             json.dump(str(test_accuracy_majority), f, indent=2)
 
@@ -518,14 +503,8 @@ def run_experiment(args):
             test_dataset_minority,
         )
 
-        # Divide the test_accuracy_minority of all the batches by the number
-        #of batches that we have
-        test_accuracy_minority = test_accuracy_minority / (
-            test_dataset_minority.__len__() / args.batch_size
-        )
-
         # Save the test accuracy on the minority group of the test data
-        output_file = "./output/test_accuracy_minority.json"
+        output_file = "./output/test_accuracy_minority_" + args.method + "_" + args.approach + "_" + args.dataset + "_run_" + str(run+1) + ".json"
         with open(output_file, "w+") as f:
             json.dump(str(test_accuracy_minority), f, indent=2)
 
