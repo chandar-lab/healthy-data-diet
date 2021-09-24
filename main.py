@@ -5,6 +5,7 @@ from experiment import run_experiment
 from models.classifier import measure_bias_metrics, train_classifier
 from argparse import ArgumentParser
 from models.data_loader import data_loader
+from analysis import analyze_results
 
 
 def parse_args():
@@ -13,12 +14,17 @@ def parse_args():
     # choosing between our work and the baselines
     parser.add_argument(
         "--method",
-        choices=["ours", "baseline_data_augmentation", "baseline_forgettable_examples", "baseline_mind_the_tradeoff"],
+        choices=[
+            "ours",
+            "baseline_data_augmentation",
+            "baseline_forgettable_examples",
+            "baseline_mind_the_tradeoff",
+            "CLP",
+        ],
         default="ours",
-        help="Choosing between our work and some of the baseline methods",
+        help="Choosing between our work and some of the baseline methods. CLP stands for Counterfactual Logit Pairing",
     )
-    parser.add_argument('--num_runs', type=int, default=5,
-                        help='Number of runs to do.')    
+    parser.add_argument("--num_runs", type=int, default=5, help="Number of runs to do.")
     parser.add_argument(
         "--approach",
         choices=["policy_gradient", "supervised_learning"],
@@ -37,12 +43,6 @@ def parse_args():
         type=float,
         default=1.41e-6,
         help="learning rate for the Bert classifier",
-    )
-    parser.add_argument(
-        "--num_saved_debiased_models",
-        type=int,
-        default=3,
-        help="The number of debiased models that are saved throughout training",
     )
     parser.add_argument(
         "--norm",
@@ -78,12 +78,10 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         choices=[
-            "Equity-Evaluation-Corpus",
-            "Twitter_sexism_dataset",
-            "HASOC_dataset",
             "IMDB_dataset",
             "kindle_dataset",
             "Wikipedia_toxicity_dataset",
+            "Twitter_sexism_dataset",
             "Twitter_toxicity_dataset",
         ],
         default="twitter_dataset",
@@ -123,38 +121,65 @@ def parse_args():
         default="saved_models",
         help="Directory to saved models",
     )
-
+    # arguments for analysing the data
+    parser.add_argument(
+        "--analyze_results",
+        type=bool,
+        default=False,
+        help="Whether or not to analyze the results by finding the examples that flipped from wrongly predicted to correctly predicted, and computing the top tokens that the model attends to",
+    )
+    parser.add_argument(
+        "--log_top_tokens_each_head",
+        type=bool,
+        default=False,
+        help="Whether or not to log the top k tokens that the classification token attends to in the last layer for each attention head",
+    )
+    parser.add_argument(
+        "--num_tokens_logged",
+        type=int,
+        default=5,
+        help="The value of k given that we log the top k tokens that the classification token attends to",
+    )
+    parser.add_argument(
+        "--num_saved_debiased_models",
+        type=int,
+        default=3,
+        help="The number of debiased models that are saved throughout training",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     for run in range(args.num_runs):
-      if args.method == "ours":
-          # Measure the performance of our model
-          model, tokenizer = run_experiment(args,run)
-          _, val_dataset, _ = data_loader(args)
-          measure_bias_metrics(model, val_dataset, args,run)
+        if args.method == "ours":
+            # Measure the performance of our model
+            model, tokenizer = run_experiment(args, run)
+            measure_bias_metrics(model, args, run)
 
-      elif args.method == "baseline_data_augmentation":
-          # Measure the perfrmance of the first baseline, which is increases the
-          #size of the dataset by gender flipping (data augmentation)
-          model, tokenizer = train_classifier(args, data_augmentation_flag=True)
-          _, val_dataset, _ = data_loader(args)
-          measure_bias_metrics(model, val_dataset, args,run)
+        if args.method == "CLP":
+            # Measure the performance of the counterfactual logit pairing model (https://arxiv.org/abs/1809.10610)
+            model, tokenizer = run_experiment(args, run)
+            measure_bias_metrics(model, args, run)
 
-      elif args.method == "baseline_forgettable_examples":
-          # Measure the perfrmance of the second baseline, which is explained here
-          #https://arxiv.org/pdf/1911.03861.pdf. We have to set the args.approach
-          # to "supervised_learning", because that's how the paper implements it.
-          model, tokenizer = run_experiment(args,run)
-          _, val_dataset, _ = data_loader(args)
-          measure_bias_metrics(model, val_dataset, args,run)
+        elif args.method == "baseline_data_augmentation":
+            # Measure the perfrmance of the first baseline, which is increases the
+            # size of the dataset by gender flipping (data augmentation)
+            model, tokenizer = train_classifier(args, data_augmentation_flag=True)
+            measure_bias_metrics(model, args, run)
 
-      elif args.method == "baseline_mind_the_tradeoff":
-          # Measure the perfrmance of the third baseline, which is explained here
-          #https://arxiv.org/pdf/2005.00315.pdf. We have to set the args.approach
-          # to "supervised_learning", because that's how the paper implements it.
-          model, tokenizer = run_experiment(args,run)
-          _, val_dataset, _ = data_loader(args)
-          measure_bias_metrics(model, val_dataset, args,run)
+        elif args.method == "baseline_forgettable_examples":
+            # Measure the perfrmance of the second baseline, which is explained here
+            # https://arxiv.org/pdf/1911.03861.pdf. We have to set the args.approach
+            # to "supervised_learning", because that's how the paper implements it.
+            model, tokenizer = run_experiment(args, run)
+            measure_bias_metrics(model, args, run)
+
+        elif args.method == "baseline_mind_the_tradeoff":
+            # Measure the perfrmance of the third baseline, which is explained here
+            # https://arxiv.org/pdf/2005.00315.pdf. We have to set the args.approach
+            # to "supervised_learning", because that's how the paper implements it.
+            model, tokenizer = run_experiment(args, run)
+            measure_bias_metrics(model, args, run)
+    if args.analyze_results == True:
+        analyze_results(args, model)
