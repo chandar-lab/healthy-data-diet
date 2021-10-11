@@ -13,10 +13,10 @@ import pandas as pd
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def measure_bias_metrics(model_after_bias_reduction, args, run):
+def assess_performance_and_bias(model_after_bias_reduction, args, run):
     """
-    Compute metrics that measure the bias and performance before and after applying our
-    de-biasing algorithm. the metrics are computed on the validation, test and IPTTS datasets.
+    Measure the performance before and after applying our de-biasing algorithm.
+    This is done by computing the metrics on the validation, test and IPTTS datasets.
     The IPTTS dataset is a synthetic dataset, developed to measure the bias in the model.
     The metrics that we compute are the following:
     1) AUC
@@ -43,7 +43,7 @@ def measure_bias_metrics(model_after_bias_reduction, args, run):
     # Load trained model before bias reduction
     model_path = "./saved_models/checkpoint-" + str(checkpoint_steps)
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
-        model_path, num_labels=len(set(val_dataset.labels)), output_attentions=True
+        model_path, num_labels=len(set(val_dataset.labels)), output_attentions=args.analyze_results
     ).to(device)
 
     for split_name, split in zip(
@@ -51,9 +51,10 @@ def measure_bias_metrics(model_after_bias_reduction, args, run):
     ):
 
         # We compute the metrics that we need by calling this function
-        AUC, accuracy, FPED, FNED = compute_accuracy_and_AUC(
+        AUC, accuracy, FPED, FNED = compute_metrics(
             split,
             split_name,
+            args.dataset,
             model_before_bias_reduction,
             model_after_bias_reduction,
             args.batch_size,
@@ -127,9 +128,10 @@ def measure_bias_metrics(model_after_bias_reduction, args, run):
                 json.dump(FNED, f, indent=2)
 
 
-def compute_accuracy_and_AUC(
+def compute_metrics(
     split_dataset,
     split_name,
+    dataset_name,
     model_before_bias_reduction,
     model_after_bias_reduction,
     batch_size,
@@ -140,6 +142,7 @@ def compute_accuracy_and_AUC(
     args:
         split_dataset: the dataset split object on which the metrics are measured.
         split_name: the name of the split on which the metrics are computed.
+        dataset_name: the nam of the dataset used
         model_before_bias_reduction: the model before updating its weights for bias reduction
         model_after_bias_reduction: the model after updating its weights for bias reduction
         batch_size: the size of the batch used
@@ -234,12 +237,10 @@ def compute_accuracy_and_AUC(
         AUC["before_bias_reduction"] = roc_auc_score(
             np.array(split_dataset.labels),
             np.array(F.softmax(y_pred_before_bias_reduction, 1).cpu())[:, 1],
-            multi_class="ovo",
         )
         AUC["after_bias_reduction"] = roc_auc_score(
             np.array(split_dataset.labels),
             np.array(F.softmax(y_pred_after_bias_reduction, 1).cpu())[:, 1],
-            multi_class="ovo",
         )
 
         # ===================================================#
@@ -252,7 +253,7 @@ def compute_accuracy_and_AUC(
                     torch.tensor(split_dataset.labels).to(device) == 0,
                 )
             )
-            / len(split_dataset.labels)
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 0)
         ).tolist()
         FPR["after_bias_reduction"] = (
             torch.sum(
@@ -261,7 +262,7 @@ def compute_accuracy_and_AUC(
                     torch.tensor(split_dataset.labels).to(device) == 0,
                 )
             )
-            / len(split_dataset.labels)
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 0)
         ).tolist()
 
         # ===================================================#
@@ -274,7 +275,7 @@ def compute_accuracy_and_AUC(
                     torch.tensor(split_dataset.labels).to(device) == 1,
                 )
             )
-            / len(split_dataset.labels)
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 1)
         ).tolist()
         FNR["after_bias_reduction"] = (
             torch.sum(
@@ -283,34 +284,43 @@ def compute_accuracy_and_AUC(
                     torch.tensor(split_dataset.labels).to(device) == 1,
                 )
             )
-            / len(split_dataset.labels)
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 1)
         ).tolist()
 
         # ===================================================#
         # Here we calculate the FNED and FPED
         if split_name == "IPTTS":
-            data_IPTTS = pd.read_csv("./data/" + "madlib.csv")
-            idxs_male = [
-                i
-                for i in range(len(data_IPTTS["gender"].values))
-                if data_IPTTS["gender"].values[i] == "male"
-            ]
-            idxs_female = [
-                i
-                for i in range(len(data_IPTTS["gender"].values))
-                if data_IPTTS["gender"].values[i] == "female"
-            ]
+            if(dataset_name == "Twitter_sexism_dataset"):
+                data_IPTTS = pd.read_csv("./data/" + "madlib.csv")
+                idxs_male = [
+                    i
+                    for i in range(len(data_IPTTS["gender"].values))
+                    if data_IPTTS["gender"].values[i] == "male"
+                ]
+                idxs_female = [
+                    i
+                    for i in range(len(data_IPTTS["gender"].values))
+                    if data_IPTTS["gender"].values[i] == "female"
+                ]
+            elif (dataset_name == "Wikipedia_toxicity_dataset" or dataset_name == "Jigsaw_toxicity_dataset"):
+                data_IPTTS = pd.read_csv("./data/" + "bias_madlibs_77k.csv")
+                idxs_male = list(data_IPTTS[data_IPTTS["text"].str.contains(" male")].index.values)
+                idxs_female = list(data_IPTTS[data_IPTTS["text"].str.contains(" female")].index.values)                
             # We just initialize the FNED and FPED to zeros, before we compute them.
             FPED["before_bias_reduction"], FPED["after_bias_reduction"] = 0, 0
             FNED["before_bias_reduction"], FNED["after_bias_reduction"] = 0, 0
 
             for idx in [idxs_male, idxs_female]:
-
-                FPED["before_bias_reduction"] += torch.abs(FPR["before_bias_reduction"]-(torch.sum(torch.logical_and(torch.argmax(y_pred_before_bias_reduction,axis = 1).to(device)[idx] == 1, torch.tensor(split_dataset.labels).to(device)[idx] == 0))/len(idx))).tolist()
-                FPED["after_bias_reduction"] += torch.abs(FPR["after_bias_reduction"]-(torch.sum(torch.logical_and(torch.argmax(y_pred_after_bias_reduction,axis = 1).to(device)[idx] == 1, torch.tensor(split_dataset.labels).to(device)[idx] == 0))/len(idx))).tolist()
+                num_positive_examples = torch.sum(torch.tensor(split_dataset.labels).to(device)[idx] == 1)
+                num_negative_examples = torch.sum(torch.tensor(split_dataset.labels).to(device)[idx] == 0)
+                pred_before_bias_reduction = torch.argmax(y_pred_before_bias_reduction,axis = 1).to(device)[idx]
+                pred_after_bias_reduction = torch.argmax(y_pred_after_bias_reduction,axis = 1).to(device)[idx]
+                ground_truth = torch.tensor(split_dataset.labels).to(device)[idx]
+                FPED["before_bias_reduction"] += torch.abs(FPR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 1, ground_truth == 0))/num_negative_examples)).tolist()
+                FPED["after_bias_reduction"] += torch.abs(FPR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 1, ground_truth == 0))/num_negative_examples)).tolist()
   
-                FNED["before_bias_reduction"] += torch.abs(FNR["before_bias_reduction"]-(torch.sum(torch.logical_and(torch.argmax(y_pred_before_bias_reduction,axis = 1).to(device)[idx] == 0, torch.tensor(split_dataset.labels).to(device)[idx] == 1))/len(idx))).tolist()
-                FNED["after_bias_reduction"] += torch.abs(FNR["after_bias_reduction"]-(torch.sum(torch.logical_and(torch.argmax(y_pred_after_bias_reduction,axis = 1).to(device)[idx] == 0, torch.tensor(split_dataset.labels).to(device)[idx] == 1))/len(idx))).tolist()
+                FNED["before_bias_reduction"] += torch.abs(FNR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 0, ground_truth == 1))/num_positive_examples)).tolist()
+                FNED["after_bias_reduction"] += torch.abs(FNR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 0, ground_truth == 1))/num_positive_examples)).tolist()
     
         return AUC, accuracy, FPED, FNED
 
@@ -351,7 +361,8 @@ def train_classifier(args, data_augmentation_flag=None):
         model = BertForSequenceClassification.from_pretrained(
             args.model_path + str(checkpoint_steps),
             num_labels=len(set(train_dataset.labels)),
-            output_attentions=True,
+            # We only need the attention weights if we are going to analyze the results
+            output_attentions=args.analyze_results,
         )
 
     else:
@@ -361,7 +372,8 @@ def train_classifier(args, data_augmentation_flag=None):
         model = BertForSequenceClassification.from_pretrained(
             model_name,
             num_labels=len(set(train_dataset.labels)),
-            output_attentions=True,
+            # We only need the attention weights if we are going to analyze the results
+            output_attentions=args.analyze_results,
         )
 
         # Define Trainer parameters
@@ -381,22 +393,9 @@ def train_classifier(args, data_augmentation_flag=None):
             args=classifier_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
-            compute_metrics=measure_performance_metrics,
             callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
         )
 
         # Train pre-trained model
         trainer.train()
     return model, tokenizer
-
-
-def measure_performance_metrics(p):
-    pred, labels = p
-    pred = np.argmax(pred[0], axis=1)
-
-    accuracy = accuracy_score(y_true=labels, y_pred=pred)
-    recall = recall_score(y_true=labels, y_pred=pred, average="micro")
-    precision = precision_score(y_true=labels, y_pred=pred, average="micro")
-    f1 = f1_score(y_true=labels, y_pred=pred, average="micro")
-
-    return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
