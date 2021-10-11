@@ -1,5 +1,5 @@
 # Main script for gathering args.
-from models.classifier import measure_bias_metrics
+from models.classifier import assess_performance_and_bias
 from argparse import ArgumentParser
 import torch
 from torch.optim import Adam
@@ -130,4 +130,4 @@ if __name__ == "__main__":
             map_location=device,
         )
     )
-    measure_bias_metrics(model, args, run=0)
+    assess_performance_and_bias(model, args, run=0)
