@@ -21,7 +21,7 @@ def training_epoch(
     train_dataset,
 ):
     """
-    Apply policy gradient/supervised learning approach for 1 epoch of the trianing data.
+    Compute the loss on the training data. 
     args:
         epoch: the current epoch
         args: the arguments given by the user
@@ -53,7 +53,8 @@ def training_epoch(
         logs["training_reward_mean"] = epoch_reward.cpu().numpy()
     logs["training_accuracy"] = epoch_accuracy.cpu().numpy()
     logs["epoch"] = epoch + 1
-    wandb.log(logs)
+    if(args.use_wandb):
+        wandb.log(logs)
 
     return loss
 
@@ -69,7 +70,7 @@ def validation_epoch(
     val_dataset,
 ):
     """
-    Apply policy gradient/supervised learning approach for 1 epoch of the validation data.
+    Compute the loss on the validation data. 
     args:
         epoch: the current epoch
         args: the arguments given by the user
@@ -107,7 +108,8 @@ def validation_epoch(
         logs["validation_accuracy"] = epoch_accuracy.cpu().numpy()
         # We add 1 because python starts with 0 instead of 1
         logs["epoch"] = epoch + 1
-        wandb.log(logs)
+        if(args.use_wandb):
+            wandb.log(logs)
 
         # if the developmenet accuracy is better than the best developement
         # reward, we save the model weights.
@@ -141,7 +143,7 @@ def test_epoch(
     test_dataset,
 ):
     """
-    Apply policy gradient/supervised learning approach for 1 epoch of the test data.
+    Compute the loss on the test data. 
     args:
         epoch: the current epoch
         args: the arguments given by the user
@@ -182,7 +184,7 @@ def epoch_loss(
     compute_gradient,
 ):
     """
-    Apply policy gradient/supervised learning approach for 1 epoch of the validation data.
+    Compute the loss for 1 epoch.
     args:
         epoch: the current epoch
         args: the arguments given by the user
@@ -237,23 +239,25 @@ def epoch_loss(
                 ]
             ).to(device),
         )[0]
-        results_gender_swap = model.forward(
-            input_ids=torch.tensor(
-                dataset.encodings_gender_swap["input_ids"][
-                    i * args.batch_size : (i + 1) * args.batch_size
-                ]
-            ).to(device),
-            attention_mask=torch.tensor(
-                dataset.encodings_gender_swap["attention_mask"][
-                    i * args.batch_size : (i + 1) * args.batch_size
-                ]
-            ).to(device),
-            token_type_ids=torch.tensor(
-                dataset.encodings_gender_swap["token_type_ids"][
-                    i * args.batch_size : (i + 1) * args.batch_size
-                ]
-            ).to(device),
-        )[0]
+        if(args.method!="CLP"):
+          # There is no gender swapping in CLP
+          results_gender_swap = model.forward(
+              input_ids=torch.tensor(
+                  dataset.encodings_gender_swap["input_ids"][
+                      i * args.batch_size : (i + 1) * args.batch_size
+                  ]
+              ).to(device),
+              attention_mask=torch.tensor(
+                  dataset.encodings_gender_swap["attention_mask"][
+                      i * args.batch_size : (i + 1) * args.batch_size
+                  ]
+              ).to(device),
+              token_type_ids=torch.tensor(
+                  dataset.encodings_gender_swap["token_type_ids"][
+                      i * args.batch_size : (i + 1) * args.batch_size
+                  ]
+              ).to(device),
+          )[0]
         results_pharaphrasing = model.forward(
             input_ids=torch.tensor(
                 dataset.encodings_paraphrasing["input_ids"][
@@ -334,30 +338,28 @@ def epoch_loss(
             batch_accuracy.append(accuracy)
 
             if args.method == "ours" or args.method == "CLP":
-                if len(dataset.encodings["input_ids"]) == len(
-                    dataset.encodings_gender_swap["input_ids"]
-                ):
-                    # We can only compute the bias if the number of examples in data
-                    # and data_gender_swap is the same
-                    bias_gender = args.lambda_gender * torch.norm(
-                        results_original_gender - results_gender_swap,
-                        dim=1,
-                        p=norm_p_value,
-                    ).to(device)
-                    bias_data = args.lambda_data * torch.norm(
-                        results_original_gender - results_pharaphrasing,
-                        dim=1,
-                        p=norm_p_value,
-                    ).to(device)
-                    if args.method == "ours":
-                        bias = bias_gender + bias_data
-                    else:
-                        bias = torch.mul(bias_gender,(1 - torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size])).to(device))
-                else:
-                    # If the nummber of examples in data and data_gender_swap is
-                    # different, we set the bias to an arbitrary value of -1,
-                    # meaning that we cant compute the bias.
-                    bias = torch.tensor(-1).to(device)
+                if(args.method != "CLP"):
+                  bias_gender = args.lambda_gender * torch.norm(
+                      results_original_gender - results_gender_swap,
+                      dim=1,
+                      p=norm_p_value,
+                  ).to(device)
+                bias_data = args.lambda_data * torch.norm(
+                    results_original_gender - results_pharaphrasing,
+                    dim=1,
+                    p=norm_p_value,
+                ).to(device)
+                if args.method == "ours":
+                    bias = bias_gender + bias_data
+                elif args.method == "CLP":
+                    # if the method used is CLP, then we only need the bias due to counterfactual logit difference
+                    # https://dl.acm.org/doi/pdf/10.1145/3306618.3317950
+                    mask = (1 - torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size])).to(device)
+                    # this mask is true when the sentence is not toxic and vice versa, as explained in the paper
+                    # https://dl.acm.org/doi/pdf/10.1145/3306618.3317950
+                    bias = torch.mul(bias_data,mask)
+                    # we only consider the bias term when the sentence is not toxic
+                    
                 batch_bias.append(torch.tensor(bias))
                 epoch_bias += torch.sum(torch.stack(batch_bias)) / args.batch_size
 
@@ -429,11 +431,12 @@ def run_experiment(args, run):
         gradient algorithm.
         tokenizer: the tokenizer used before giving the sentences to the classifier
     """
-    wandb.init(
-        name=str(args.dataset) + "_run_" + str(run),
-        project="reducing gender bias",
-        config=args,
-    )
+    if(args.use_wandb):
+        wandb.init(
+            name=str(args.dataset) + "_run_" + str(run),
+            project="reducing gender bias",
+            config=args,
+        )
     # Define pretrained tokenizer and mode
     model, tokenizer = train_classifier(args)
     model = model.to(device)
@@ -457,7 +460,7 @@ def run_experiment(args, run):
             device,
             tokenizer,
             model,
-            val_dataset,
+            train_dataset,
         )
         validation_loss, best_validation_reward = validation_epoch(
             epoch,
@@ -469,7 +472,7 @@ def run_experiment(args, run):
             best_validation_reward,
             val_dataset,
         )
-        if epoch < args.num_saved_debiased_models:
+        if epoch < args.num_saved_debiased_models and args.analyze_results == True:
             torch.save(
                 model.state_dict(),
                 "./saved_models/"
