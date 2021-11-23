@@ -1,10 +1,7 @@
 # Main script for gathering args.
-
-import argparse
 from experiment import run_experiment
-from models.classifier import assess_performance_and_bias, train_classifier
+from model.classifier import assess_performance_and_bias
 from argparse import ArgumentParser
-from models.data_loader import data_loader
 from analysis import analyze_results
 
 
@@ -15,11 +12,10 @@ def parse_args():
     parser.add_argument(
         "--method",
         choices=[
-            "ours",
             "baseline_data_augmentation",
-            "baseline_forgettable_examples",
-            "baseline_mind_the_tradeoff",
+            "baseline_data_substitution",
             "CLP",
+            "baseline_data_substitution",
         ],
         default="ours",
         help="Choosing between our work and some of the baseline methods. CLP stands for Counterfactual Logit Pairing",
@@ -62,12 +58,6 @@ def parse_args():
         default=4,
         help="The hyperparameter controling the weight given to the reward due to unintended correlation bias",
     )
-    parser.add_argument(
-        "--compute_majority_and_minority_accuracy",
-        type=bool,
-        default=False,
-        help="Whether or not to compute the test accuracy on the majority and minority groups of the test data",
-    )
     # arguments for the classifier for pretraining
     parser.add_argument(
         "--classifier_model",
@@ -78,12 +68,9 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         choices=[
-            "IMDB_dataset",
-            "kindle_dataset",
             "Jigsaw_toxicity_dataset",
             "Wikipedia_toxicity_dataset",
             "Twitter_sexism_dataset",
-            "Twitter_toxicity_dataset",
         ],
         default="twitter_dataset",
         help="Type of dataset used",
@@ -125,9 +112,35 @@ def parse_args():
     parser.add_argument(
         "--use_wandb",
         type=bool,
-        default=False,
+        default=True,
         help="Whether or not to use wandb to visualize the results",
+    )  
+    parser.add_argument(
+        "--use_auxiliary_loss",
+        type=bool,
+        default=False,
+        help="Whether or not to use the auxiliary loss that we are proposing",
     )    
+    parser.add_argument(
+        '--hidden_dropout',
+        type=float,
+        default=0.1,
+        help='Dropout rate for the hidden layers of the model')   
+    parser.add_argument(
+        '--attention_dropout',
+        type=float,
+        default=0.1,
+        help='Dropout rate for the attention layers of the model')    
+    parser.add_argument(
+        '--tokenizer_dropout',
+        type=float,
+        default=0.1,
+        help='Dropout rate of the tokenizer')       
+    parser.add_argument(
+        '--num_hidden_layers',
+        type=int,
+        default=12,
+        help='Number of layers in the model')  
     # arguments for analysing the data
     parser.add_argument(
         "--analyze_results",
@@ -135,6 +148,12 @@ def parse_args():
         default=False,
         help="Whether or not to analyze the results by finding the examples that flipped from wrongly predicted to correctly predicted, and computing the top tokens that the model attends to",
     )
+    parser.add_argument(
+        "--analyze_attention",
+        type=bool,
+        default=False,
+        help="Whether or not to analyze the attention map",
+    )    
     parser.add_argument(
         "--log_top_tokens_each_head",
         type=bool,
@@ -158,35 +177,8 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    for run in range(args.num_runs):
-        if args.method == "ours":
-            # Measure the performance of our model
-            model, tokenizer = run_experiment(args, run)
-            assess_performance_and_bias(model, args, run)
-
-        if args.method == "CLP":
-            # Measure the performance of the counterfactual logit pairing model (https://arxiv.org/abs/1809.10610)
-            model, tokenizer = run_experiment(args, run)
-            assess_performance_and_bias(model, args, run)
-
-        elif args.method == "baseline_data_augmentation":
-            # Measure the perfrmance of the first baseline, which is increases the
-            # size of the dataset by gender flipping (data augmentation)
-            model, tokenizer = train_classifier(args, data_augmentation_flag=True)
-            assess_performance_and_bias(model, args, run)
-
-        elif args.method == "baseline_forgettable_examples":
-            # Measure the perfrmance of the second baseline, which is explained here
-            # https://arxiv.org/pdf/1911.03861.pdf. We have to set the args.approach
-            # to "supervised_learning", because that's how the paper implements it.
-            model, tokenizer = run_experiment(args, run)
-            assess_performance_and_bias(model, args, run)
-
-        elif args.method == "baseline_mind_the_tradeoff":
-            # Measure the perfrmance of the third baseline, which is explained here
-            # https://arxiv.org/pdf/2005.00315.pdf. We have to set the args.approach
-            # to "supervised_learning", because that's how the paper implements it.
-            model, tokenizer = run_experiment(args, run)
-            assess_performance_and_bias(model, args, run)
+    for run in range(args.num_runs):         
+        model, tokenizer = run_experiment(args, run)
+        assess_performance_and_bias(model, args, run)            
     if args.analyze_results == True:
         analyze_results(args, model)
