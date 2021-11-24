@@ -1,6 +1,7 @@
 import pandas as pd
 from transformers import BertTokenizer
 import torch
+import numpy as np
 
 # Create torch dataset
 class Dataset(torch.utils.data.Dataset):
@@ -28,7 +29,7 @@ class Dataset(torch.utils.data.Dataset):
         return len(self.encodings["input_ids"])
 
 
-def data_loader(args, subset=None, apply_data_augmentation=None, IPTTS=False):
+def data_loader(args, subset=None, apply_data_augmentation=None, apply_data_substitution=None, IPTTS=False):
     """
     Load the data  from the CSV files and an object for each split in the dataset.
     For each dataset, we have the data stored in both the original form, as well
@@ -42,6 +43,9 @@ def data_loader(args, subset=None, apply_data_augmentation=None, IPTTS=False):
         apply_data_augmentation: a flag to choose whether or not to apply data
         augmentation, meaning that the number of examples doubles because we flip
         the gender in each example and add it as a new example.
+        apply_data_substitution: a flag to choose whether or not to apply data
+        substitution, meaning that with a probability of 0.5 we flip the gender
+        in each example https://arxiv.org/abs/1909.00871.        
         IPTTS: a flag that means that we want to also return the IPTTS dataset,
         which is the dataset on which we compute the bias metrics. We can also
         compute the AUC score on it.
@@ -91,48 +95,57 @@ def data_loader(args, subset=None, apply_data_augmentation=None, IPTTS=False):
     # preserving the meaning. For example, the sentence "I really liked the movie"
     # becomes "I enjoyed the movie".
     X_train_paraphrased = list(data_train["data augmentation"])
+    X_valid_paraphrased = list(data_valid["data augmentation"])
+    X_test_paraphrased = list(data_test["data augmentation"])
+    
     if apply_data_augmentation == True:
-        # We make sure that the column names are the same, to be able to concatenate them into a single data frame
+        # We also duplicate the paraphrased examples
+        X_train_paraphrased = list(data_train["data augmentation"]) + list(data_train["data augmentation"])
+        X_valid_paraphrased = list(data_valid["data augmentation"]) + list(data_valid["data augmentation"])
+        X_test_paraphrased = list(data_test["data augmentation"]) + list(data_test["data augmentation"])      
+                
+        # We now duplicate the examples. We make sure that the column names are the same,
+        # to be able to concatenate them into a single data frame   
         data_train_gender_swap = data_train_gender_swap.rename(
             columns={data_train_gender_swap.columns[0]: data_train.columns[0]}
         )
         data_train = pd.concat(
             [data_train, data_train_gender_swap], axis=0, ignore_index=True
         )
-
-    if subset == "majority":
-        data_test = data_test[data_test["majority"] == True]
-        data_test_gender_swap = data_test_gender_swap[
-            data_test_gender_swap["majority"] == True
-        ]
-
-        data_train = data_train[data_train["majority"] == True]
-        data_train_gender_swap = data_train_gender_swap[
-            data_train_gender_swap["majority"] == True
-        ]
-
-        data_valid = data_valid[data_valid["majority"] == True]
-        data_valid_gender_swap = data_valid_gender_swap[
-            data_valid_gender_swap["majority"] == True
-        ]
-    elif subset == "minority":
-        data_test = data_test[data_test["minority"] == True]
-        data_test_gender_swap = data_test_gender_swap[
-            data_test_gender_swap["minority"] == True
-        ]
-
-        data_train = data_train[data_train["minority"] == True]
-        data_train_gender_swap = data_train_gender_swap[
-            data_train_gender_swap["minority"] == True
-        ]
-
-        data_valid = data_valid[data_valid["minority"] == True]
-        data_valid_gender_swap = data_valid_gender_swap[
-            data_valid_gender_swap["minority"] == True
-        ]
-
+        data_valid_gender_swap = data_valid_gender_swap.rename(
+            columns={data_valid_gender_swap.columns[0]: data_valid.columns[0]}
+        )
+        data_valid = pd.concat(
+            [data_valid, data_valid_gender_swap], axis=0, ignore_index=True
+        )        
+        data_test_gender_swap = data_test_gender_swap.rename(
+            columns={data_test_gender_swap.columns[0]: data_test.columns[0]}
+        )
+        data_test = pd.concat(
+            [data_test, data_test_gender_swap], axis=0, ignore_index=True
+        )
+        
+        # We also do data augmentation for the gender-swapped examples.
+        data_train_gender_swap = pd.concat(
+            [data_train_gender_swap, data_train.iloc[0:len(data_train_gender_swap)]], axis=0, ignore_index=True
+        )      
+        data_valid_gender_swap = pd.concat(
+            [data_valid_gender_swap, data_valid.iloc[0:len(data_valid_gender_swap)]], axis=0, ignore_index=True
+        )     
+        data_test_gender_swap = pd.concat(
+            [data_test_gender_swap, data_test.iloc[0:len(data_test_gender_swap)]], axis=0, ignore_index=True
+        )        
+                
+    if apply_data_substitution == True:
+        # We substitute each example with the gender-flipped one, with a probability of 0.5, 
+        # as described in https://arxiv.org/abs/1909.00871
+        for i in range(len(data_train)):
+          if(np.random.uniform(0,1,1)[0]>0.5):
+            temp = data_train_gender_swap[data_train_gender_swap.columns[0]].iloc[i]
+            data_train_gender_swap[data_train_gender_swap.columns[0]].iloc[i] = data_train[data_train.columns[0]].iloc[i]
+            data_train[data_train.columns[0]].iloc[i] = temp        
     model_name = args.classifier_model
-    tokenizer = BertTokenizer.from_pretrained(model_name)
+    tokenizer = BertTokenizer.from_pretrained(model_name, hidden_dropout_prob = args.tokenizer_dropout)
 
     # ----- 1. Preprocess data -----#
     # Preprocess data
@@ -140,11 +153,9 @@ def data_loader(args, subset=None, apply_data_augmentation=None, IPTTS=False):
     y_train = list(data_train[data_train.columns[1]])
 
     X_val = list(data_valid[data_valid.columns[0]])
-    X_valid_paraphrased = list(data_valid["data augmentation"])
     y_val = list(data_valid[data_valid.columns[1]])
 
     X_test = list(data_test[data_test.columns[0]])
-    X_test_paraphrased = list(data_test["data augmentation"])
     y_test = list(data_test[data_test.columns[1]])
 
     if(args.method!="CLP"):
@@ -155,6 +166,7 @@ def data_loader(args, subset=None, apply_data_augmentation=None, IPTTS=False):
       X_val_gender_swap = list(data_valid_gender_swap[data_valid_gender_swap.columns[0]])
 
       X_test_gender_swap = list(data_test_gender_swap[data_test_gender_swap.columns[0]])
+      
       X_train_gender_swap_tokenized = tokenizer(
           X_train_gender_swap, padding=True, truncation=True, max_length=args.max_length
       )
@@ -227,8 +239,9 @@ def data_loader(args, subset=None, apply_data_augmentation=None, IPTTS=False):
           labels = y_test,
       )      
 
+    #IPTTS is a synthetic dataset that is used to compute the fairness metrics
     if (IPTTS == True):
-        if(args.dataset == "Twitter_sexism_dataset"):
+        if(args.dataset == "Twitter_sexism_dataset" or args.dataset == "Twitter_toxicity_dataset"):
             data_IPTTS = pd.read_csv("./data/" + "madlib.csv")
         elif (args.dataset == "Wikipedia_toxicity_dataset" or args.dataset == "Jigsaw_toxicity_dataset"):
             data_IPTTS = pd.read_csv("./data/" + "bias_madlibs_77k.csv")
