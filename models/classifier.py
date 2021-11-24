@@ -1,14 +1,14 @@
 from transformers import TrainingArguments, Trainer
 from transformers import BertTokenizer, BertForSequenceClassification
 from transformers import EarlyStoppingCallback
-from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
-from models.data_loader import data_loader
+from model.data_loader import data_loader
 from sklearn.metrics import roc_auc_score
 import torch
 import json
 import numpy as np
 import torch.nn.functional as F
 import pandas as pd
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -21,7 +21,7 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
     The metrics that we compute are the following:
     1) AUC
     2) Accuracy
-    3) FRED
+    3) FNED
     4) FPED
     args:
         model_after_bias_reduction: the model after updating its weights due to bias reduction
@@ -31,23 +31,29 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
         the function doesnt return anything, since all the metrics are saved in json files.
     """
     # We need to load the datasets on which we measure the metrics.
-    if (args.method == "baseline_data_augmentation" == True):
-      train_dataset, val_dataset, test_dataset, IPTTS_dataset = data_loader(args, IPTTS=True, apply_data_augmentation=True)
-    else:
-      train_dataset, val_dataset, test_dataset, IPTTS_dataset = data_loader(args, IPTTS=True, apply_data_augmentation=False)
-    checkpoint_steps = (
-        int(train_dataset.__len__() / args.batch_size_pretraining)
-        * args.num_epochs_pretraining
-    )
+    train_dataset, val_dataset, test_dataset, IPTTS_dataset = data_loader(args, IPTTS=True, apply_data_augmentation = (args.method == "baseline_data_augmentation"), apply_data_substitution = (args.method == "baseline_data_substitution"))
 
-    # Load trained model before bias reduction
+
+    if(args.method == "baseline_data_augmentation"):
+        # In data augmentation, the model before bias reduction had half the number of examples
+        checkpoint_steps = (
+            int((train_dataset.__len__()/2) / args.batch_size_pretraining)
+            * args.num_epochs_pretraining
+        )
+    else:
+        checkpoint_steps = (
+            int(train_dataset.__len__() / args.batch_size_pretraining)
+            * args.num_epochs_pretraining
+        )        
+    
+
     model_path = "./saved_models/checkpoint-" + str(checkpoint_steps)
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
-        model_path, num_labels=len(set(val_dataset.labels)), output_attentions=args.analyze_results
+        model_path, num_labels=len(set(val_dataset.labels)), output_attentions=args.analyze_attention
     ).to(device)
 
     for split_name, split in zip(
-        ["test", "validation", "IPTTS"], [val_dataset, test_dataset, IPTTS_dataset]
+        ["test", "validation", "IPTTS"], [test_dataset, val_dataset, IPTTS_dataset]
     ):
 
         # We compute the metrics that we need by calling this function
@@ -62,7 +68,7 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
 
         # We now save the metrics in json files
         output_file = (
-            "./output/"
+            "./output/AUC/"
             + split_name
             + "_AUC_"
             + args.method
@@ -70,15 +76,23 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
             + args.approach
             + "_"
             + args.dataset
+            +
+            "_aux_loss_"
+            +
+            str(args.use_auxiliary_loss)            
             + "_"
             + args.norm
+            + "_"
+            +str(args.lambda_gender)
+            + "_"
+            + str(args.lambda_data)       
             + ".json"
         )
         with open(output_file, "w+") as f:
             json.dump(AUC, f, indent=2)
 
         output_file = (
-            "./output/"
+            "./output/accuracy/"
             + split_name
             + "_accuracy_"
             + args.method
@@ -86,8 +100,16 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
             + args.approach
             + "_"
             + args.dataset
+            +
+            "_aux_loss_"
+            +
+            str(args.use_auxiliary_loss)            
             + "_"
             + args.norm
+            + "_"
+            +str(args.lambda_gender)
+            + "_"
+            + str(args.lambda_data)            
             + ".json"
         )
         with open(output_file, "w+") as f:
@@ -96,7 +118,7 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
         if split_name == "IPTTS":
             # If the dataset is the IPTTS dataset, we also save the FPED and FNED.
             output_file = (
-                "./output/"
+                "./output/FPED/"
                 + split_name
                 + "_FPED_"
                 + args.method
@@ -104,15 +126,23 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
                 + args.approach
                 + "_"
                 + args.dataset
+                +
+                "_aux_loss_"
+                +
+                str(args.use_auxiliary_loss)
                 + "_"
                 + args.norm
+                + "_"
+                +str(args.lambda_gender)
+                + "_"
+                + str(args.lambda_data)                
                 + ".json"
             )
             with open(output_file, "w+") as f:
                 json.dump(FPED, f, indent=2)
 
             output_file = (
-                "./output/"
+                "./output/FNED/"
                 + split_name
                 + "_FNED_"
                 + args.method
@@ -120,8 +150,16 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
                 + args.approach
                 + "_"
                 + args.dataset
+                +
+                "_aux_loss_"
+                +
+                str(args.use_auxiliary_loss)                
                 + "_"
                 + args.norm
+                + "_"
+                +str(args.lambda_gender)
+                + "_"
+                + str(args.lambda_data)          
                 + ".json"
             )
             with open(output_file, "w+") as f:
@@ -161,6 +199,7 @@ def compute_metrics(
         num_labels = len(set(split_dataset.labels))
         y_pred_after_bias_reduction = torch.ones([0, num_labels]).to(device)
         y_pred_before_bias_reduction = torch.ones([0, num_labels]).to(device)
+
 
         for i in range(int(np.ceil(len(split_dataset) / batch_size))):
 
@@ -213,10 +252,8 @@ def compute_metrics(
             y_pred_before_bias_reduction = torch.cat(
                 (y_pred_before_bias_reduction, batch_original_gender), 0
             )
-
         # ===================================================#
         # Here we calculate the accuracy
-
         accuracy["before_bias_reduction"] = (
             torch.sum(
                 torch.argmax(y_pred_before_bias_reduction, axis=1).to(device)
@@ -288,9 +325,9 @@ def compute_metrics(
         ).tolist()
 
         # ===================================================#
-        # Here we calculate the FNED and FPED
+        # Here we calculate the FNED and FPED metrics, as described in https://arxiv.org/pdf/2004.14088.pdf
         if split_name == "IPTTS":
-            if(dataset_name == "Twitter_sexism_dataset"):
+            if(dataset_name == "Twitter_sexism_dataset" or dataset_name == "Twitter_toxicity_dataset"):
                 data_IPTTS = pd.read_csv("./data/" + "madlib.csv")
                 idxs_male = [
                     i
@@ -328,16 +365,13 @@ def compute_metrics(
 # Some of the following parts are taken from
 # https://towardsdatascience.com/fine-tuning-pretrained-nlp-models-with-huggingfaces-trainer-6326a4456e7b
 # by Vincent Tan
-def train_classifier(args, data_augmentation_flag=None):
+def train_classifier(args):
     """
     Train a classifier to be used as our starting point for polcy gradient.
     We can either train from scratch or load a pretrained model depending on
     the user's choice.
     args:
         args: the arguments given by the user
-        data_augmentation_flag: a flag to choose whether or not to apply data
-        augmentation, meaning that the number of examples doubles because we
-        flip the gender in each example and add it as a new example.
     returns:
         model: the model that is going to be our starting point for polic
         y gradient
@@ -346,34 +380,35 @@ def train_classifier(args, data_augmentation_flag=None):
     """
     # Load the dataset
     train_dataset, val_dataset, test_dataset = data_loader(
-        args, apply_data_augmentation=data_augmentation_flag
-    )
+        args)
     # The number of epochs afterwhich we save the model. We set it to this
     # value to only save the last model.
     checkpoint_steps = (
         int(train_dataset.__len__() / args.batch_size_pretraining)
-        * args.num_epochs_pretraining
     )
 
     if args.load_pretrained_classifier:
 
-        tokenizer = BertTokenizer.from_pretrained(args.classifier_model)
+        tokenizer = BertTokenizer.from_pretrained(args.classifier_model, hidden_dropout_prob = args.tokenizer_dropout)
         model = BertForSequenceClassification.from_pretrained(
             args.model_path + str(checkpoint_steps),
             num_labels=len(set(train_dataset.labels)),
             # We only need the attention weights if we are going to analyze the results
-            output_attentions=args.analyze_results,
+            output_attentions=args.analyze_attention,
         )
 
     else:
         # Define pretrained tokenizer and model
         model_name = args.classifier_model
-        tokenizer = BertTokenizer.from_pretrained(model_name)
+        tokenizer = BertTokenizer.from_pretrained(model_name, hidden_dropout_prob = args.tokenizer_dropout)
         model = BertForSequenceClassification.from_pretrained(
             model_name,
             num_labels=len(set(train_dataset.labels)),
             # We only need the attention weights if we are going to analyze the results
-            output_attentions=args.analyze_results,
+            output_attentions = args.analyze_attention,
+            num_hidden_layers = args.num_hidden_layers,
+            hidden_dropout_prob = args.hidden_dropout,
+            attention_probs_dropout_prob = args.attention_dropout
         )
 
         # Define Trainer parameters
