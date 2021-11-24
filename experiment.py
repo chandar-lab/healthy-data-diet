@@ -1,8 +1,8 @@
 from torch.optim import Adam
 import numpy as np
 import torch
-from models.classifier import train_classifier
-from models.data_loader import data_loader
+from model.classifier import train_classifier
+from model.data_loader import data_loader
 import wandb
 import json
 import torch.nn as nn
@@ -67,6 +67,7 @@ def validation_epoch(
     tokenizer,
     model,
     best_validation_reward,
+    maximum_bias,
     val_dataset,
 ):
     """
@@ -79,6 +80,7 @@ def validation_epoch(
         tokenizer: the tokenizer used before giving the sentences to the classifier
         model: the pretrained classifier
         best_validation_reward: the best validation reward that we use for model
+        maximum bias: the maximum bias on the validation dataset (bias due to bot gender and paraphrasing)
         selection
         val_dataset: the validation data object
     returns:
@@ -111,10 +113,15 @@ def validation_epoch(
         if(args.use_wandb):
             wandb.log(logs)
 
+        if(epoch_bias > maximum_bias):
+            maximum_bias = epoch_bias
         # if the developmenet accuracy is better than the best developement
         # reward, we save the model weights.
-        if (epoch_accuracy - epoch_bias) > best_validation_reward:
-            best_validation_reward = epoch_accuracy - epoch_bias
+        # We divide by the maximum bias to make sure both the accureacy and bias
+        # are between 0 and 1. We add a small number in the denominator to
+        # avoid dividing by 0
+        if (epoch_accuracy - (epoch_bias/(maximum_bias+0.001))) > best_validation_reward:
+            best_validation_reward = epoch_accuracy - (epoch_bias/(maximum_bias+0.001))
             torch.save(
                 model.state_dict(),
                 "./saved_models/"
@@ -125,12 +132,20 @@ def validation_epoch(
                 + args.approach
                 + "_"
                 + args.dataset
+                +
+                "_aux_loss_"
+                +
+                str(args.use_auxiliary_loss)                
                 + "_"
                 + args.norm
+                + "_"
+                +str(args.lambda_gender)
+                + "_"
+                + str(args.lambda_data)                   
                 + "_debiased_best.pt",
             )
 
-    return loss, best_validation_reward
+    return loss, best_validation_reward, maximum_bias
 
 
 def test_epoch(
@@ -239,7 +254,7 @@ def epoch_loss(
                 ]
             ).to(device),
         )[0]
-        if(args.method!="CLP"):
+        if(args.use_auxiliary_loss):
           # There is no gender swapping in CLP
           results_gender_swap = model.forward(
               input_ids=torch.tensor(
@@ -258,23 +273,24 @@ def epoch_loss(
                   ]
               ).to(device),
           )[0]
-        results_pharaphrasing = model.forward(
-            input_ids=torch.tensor(
-                dataset.encodings_paraphrasing["input_ids"][
-                    i * args.batch_size : (i + 1) * args.batch_size
-                ]
-            ).to(device),
-            attention_mask=torch.tensor(
-                dataset.encodings_paraphrasing["attention_mask"][
-                    i * args.batch_size : (i + 1) * args.batch_size
-                ]
-            ).to(device),
-            token_type_ids=torch.tensor(
-                dataset.encodings_paraphrasing["token_type_ids"][
-                    i * args.batch_size : (i + 1) * args.batch_size
-                ]
-            ).to(device),
-        )[0]
+        if(args.use_auxiliary_loss or args.method=="CLP"):  
+            results_pharaphrasing = model.forward(
+                input_ids=torch.tensor(
+                    dataset.encodings_paraphrasing["input_ids"][
+                        i * args.batch_size : (i + 1) * args.batch_size
+                    ]
+                ).to(device),
+                attention_mask=torch.tensor(
+                    dataset.encodings_paraphrasing["attention_mask"][
+                        i * args.batch_size : (i + 1) * args.batch_size
+                    ]
+                ).to(device),
+                token_type_ids=torch.tensor(
+                    dataset.encodings_paraphrasing["token_type_ids"][
+                        i * args.batch_size : (i + 1) * args.batch_size
+                    ]
+                ).to(device),
+            )[0]
 
         if args.approach == "policy_gradient":
             rewards_acc, rewards_bias, rewards_total = [], [], []
@@ -337,7 +353,9 @@ def epoch_loss(
 
             batch_accuracy.append(accuracy)
 
-            if args.method == "ours" or args.method == "CLP":
+            if args.use_auxiliary_loss or args.method == "CLP":
+                # We create a mask that lets us apply the bias penalty only to the examples that have a groundtruth label of 0
+                mask = (1 - torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size])).to(device)
                 if(args.method != "CLP"):
                   bias_gender = args.lambda_gender * torch.norm(
                       results_original_gender - results_gender_swap,
@@ -349,16 +367,15 @@ def epoch_loss(
                     dim=1,
                     p=norm_p_value,
                 ).to(device)
-                if args.method == "ours":
-                    bias = bias_gender + bias_data
+                if args.use_auxiliary_loss:
+                    bias = bias_data + torch.mul(bias_gender,mask)
                 elif args.method == "CLP":
                     # if the method used is CLP, then we only need the bias due to counterfactual logit difference
                     # https://dl.acm.org/doi/pdf/10.1145/3306618.3317950
-                    mask = (1 - torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size])).to(device)
-                    # this mask is true when the sentence is not toxic and vice versa, as explained in the paper
-                    # https://dl.acm.org/doi/pdf/10.1145/3306618.3317950
+                    
+                    # this mask is true when the sentence is not toxic and vice versa, as explained in the paper.
+                    # We only consider the bias term when the sentence is not toxic
                     bias = torch.mul(bias_data,mask)
-                    # we only consider the bias term when the sentence is not toxic
                     
                 batch_bias.append(torch.tensor(bias))
                 epoch_bias += torch.sum(torch.stack(batch_bias)) / args.batch_size
@@ -367,7 +384,7 @@ def epoch_loss(
 
             output_dim = results_original_gender.shape[1]
 
-            if args.method == "baseline_forgettable_examples":
+            if ((args.method == "baseline_data_augmentation" or args.method == "baseline_data_substitution") and args.use_auxiliary_loss==False):
                 # This baseline method fine-tunes based only on cross entropy,
                 # without the additional term for the loss due to bias term
                 # (unlike ours).
@@ -378,17 +395,7 @@ def epoch_loss(
                     results_original_gender.contiguous().view(-1, output_dim),
                     targets.contiguous().view(-1),
                 )
-            elif args.method == "baseline_mind_the_tradeoff":
-                # This baseline uses soft labels
-                targets = torch.zeros(results_original_gender.shape[0], output_dim).to(
-                    device
-                )
-                targets[:, 1] = torch.tensor(
-                    dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]
-                ).to(device)
-                targets[:, 0] = 1 - targets[:, 1]
-                loss = -(targets * torch.log(results_original_gender)).sum(dim=1).mean()
-            elif args.method == "ours" or args.method == "CLP":
+            elif args.use_auxiliary_loss or args.method == "CLP":
                 targets = torch.tensor(
                     dataset.labels[i * args.batch_size : (i + 1) * args.batch_size]
                 ).to(device)
@@ -418,10 +425,6 @@ def run_experiment(args, run):
     Run the experiment by passing over the training and validation data to
     fine-tune the pretrained model.
     Compute the test accuracy on the whole test set.
-    Compute the test accuracy on the majority and majority groups of the test
-    data. The majority groups refers to the set of examples where relying on
-    the unintended correlation helps, whereas the minority group represens the
-    set of exmaple where relying on unintended correlation hurts the performance.
     Save the text accuracy in json files.
     args:
         args: the arguments given by the user
@@ -443,15 +446,10 @@ def run_experiment(args, run):
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
 
     # Load the dataset
-    if args.method == "baseline_forgettable_examples":
-        # This baseline method only fine-tunes on the minority examples
-        # (https://arxiv.org/pdf/1911.03861.pdf). Our method fine-tunes on the
-        # whole dataset.
-        train_dataset, val_dataset, test_dataset = data_loader(args, subset="minority")
-    else:
-        train_dataset, val_dataset, test_dataset = data_loader(args)
+    train_dataset, val_dataset, test_dataset = data_loader(args, apply_data_augmentation = (args.method == "baseline_data_augmentation"), apply_data_substitution = (args.method == "baseline_data_substitution"))
 
     best_validation_reward = torch.tensor(-float("inf")).to(device)
+    maximum_bias = torch.tensor(0).to(device)
     for epoch in range(args.num_epochs):
         training_loss = training_epoch(
             epoch,
@@ -462,7 +460,7 @@ def run_experiment(args, run):
             model,
             train_dataset,
         )
-        validation_loss, best_validation_reward = validation_epoch(
+        validation_loss, best_validation_reward, maximum_bias = validation_epoch(
             epoch,
             args,
             optimizer,
@@ -470,6 +468,7 @@ def run_experiment(args, run):
             tokenizer,
             model,
             best_validation_reward,
+            maximum_bias,
             val_dataset,
         )
         if epoch < args.num_saved_debiased_models and args.analyze_results == True:
@@ -483,8 +482,16 @@ def run_experiment(args, run):
                 + args.approach
                 + "_"
                 + args.dataset
+                +
+                "_aux_loss_"
+                +
+                str(args.use_auxiliary_loss)                
                 + "_"
                 + args.norm
+                + "_"
+                +str(args.lambda_gender)
+                + "_"
+                + str(args.lambda_data)          
                 + "_debiased_epoch_"
                 + str(epoch)
                 + ".pt",
@@ -501,8 +508,16 @@ def run_experiment(args, run):
             + args.approach
             + "_"
             + args.dataset
+            +
+            "_aux_loss_"
+            +
+            str(args.use_auxiliary_loss)            
             + "_"
             + args.norm
+            + "_"
+            + str(args.lambda_gender)
+            + "_"
+            + str(args.lambda_data)             
             + "_debiased_best.pt",
             map_location=device,
         )
@@ -522,78 +537,26 @@ def run_experiment(args, run):
 
     # Save the test accuracy
     output_file = (
-        "./output/test_accuracy_"
+        "./output/accuracy/test_accuracy_"
         + args.method
         + "_"
         + args.approach
         + "_"
         + args.dataset
+        +
+        "_aux_loss_"
+        +
+        str(args.use_auxiliary_loss)        
         + "_"
         + args.norm
+        + "_"
+        +str(args.lambda_gender)
+        + "_"
+        + str(args.lambda_data)         
         + ".json"
     )
     with open(output_file, "w+") as f:
         json.dump(test_accuracy.tolist(), f, indent=2)
 
-    if args.compute_majority_and_minority_accuracy:
-        # Compute the test accuracy on the majority and majority groups of the
-        # test data.
-        # The majority groups refers to the set of examples where relying on
-        # the unintended correlation improves the performance, whereas the
-        # minority group represents the set of exmaples where relying on
-        # unintended correlation hurts the performance.
-
-        # Load the dataset
-        _, _, test_dataset_majority = data_loader(args, subset="majority")
-        _, _, test_dataset_minority = data_loader(args, subset="minority")
-        _, test_accuracy_majority = test_epoch(
-            epoch,
-            args,
-            optimizer,
-            device,
-            tokenizer,
-            model,
-            test_dataset_majority,
-        )
-
-        # Save the test accuracy on the majority group in the test data
-        output_file = (
-            "./output/test_accuracy_majority_"
-            + args.method
-            + "_"
-            + args.approach
-            + "_"
-            + args.dataset
-            + "_"
-            + args.norm
-            + ".json"
-        )
-        with open(output_file, "w+") as f:
-            json.dump(test_accuracy_majority.tolist(), f, indent=2)
-
-        _, test_accuracy_minority = test_epoch(
-            epoch,
-            args,
-            optimizer,
-            device,
-            tokenizer,
-            model,
-            test_dataset_minority,
-        )
-
-        # Save the test accuracy on the minority group of the test data
-        output_file = (
-            "./output/test_accuracy_minority_"
-            + args.method
-            + "_"
-            + args.approach
-            + "_"
-            + args.dataset
-            + "_"
-            + args.norm
-            + ".json"
-        )
-        with open(output_file, "w+") as f:
-            json.dump(test_accuracy_minority.tolist(), f, indent=2)
 
     return model, tokenizer
