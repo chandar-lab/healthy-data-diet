@@ -1,23 +1,15 @@
-# reducing-gender-bias-using-RL
-Reduce gender bias in machine learning models using reinforcement learning.
+# reducing-gender-bias-using-auxiliary-loss
+Reduce gender bias in machine learning models using an auxiliary loss.
 
 ## What is it?
-We introduce a method that reduces the bias in classifiers using policy gradient algorithm. The method uses classifiers from 🤗 Hugging Face ([link](https://github.com/huggingface/transformers)). 
+We introduce a method that reduces the bias in classifiers using an auxiliary loss term. The method uses classifiers from 🤗 Hugging Face ([link](https://github.com/huggingface/transformers)). 
 
 ## How it works
 Reducing the bias in classifiers using policy gradient can be summarized as follows:
 
-1. **Training a vanilla classifier**: Train a classifier on a certain task (currently we have tested the algorithm on sentiment analysis and sexism detection, but it should work on any other NLP classification task).
-2. **Fine-tuning**: Starting with the pre-trained model, we fine-tune the weights using policy gradient. The model gets two rewards: a binary reward whenever it correctly predicts the label, and a negative reward whenever it gives a different prediction after swapping the gender in the sentence.
-3. **Evaluation metrics**: To prove the efficacy of our approach, we use already existing metrics to measure the bias before and after applying policy gradient algorithm. The metrics used are: demographic parity, equality of odds, counterfactual token fairness, true negative rate, true positive rate and equality of opportunity.
-
-This process is illustrated in the sketch below:
-
-
-<div style="text-align: center">
-<img src="images/policy_gradient_algorithm.png" width="600">
-<p style="text-align: center;"> <b>Figure:</b> The pipeline used in the policy gradient approach. </p>
-</div>
+1. **Training a vanilla classifier**: Train a classifier on a certain task (currently we have tested the algorithm on sexism and toxicity detection, but it should work on any other NLP classification task).
+2. **Fine-tuning**: Starting with the pre-trained model, we fine-tune the weights using our auxiliary loss term. 
+3. **Evaluation metrics**: To prove the efficacy of our approach, we use already existing metrics to measure the bias before and after applying policy gradient algorithm. The metrics used are: false negative equality difference (FNED) and false positive equality difference (FPED).
 
 ## Installation
 
