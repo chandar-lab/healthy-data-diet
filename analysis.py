@@ -23,12 +23,11 @@ def compute_confidence_and_variability_after_debiasing(
     Compute the confidence and variability in the model after debiasing as in https://arxiv.org/pdf/2009.10795.pdf as follows:
     1) The model is trained for multple epochs, and after each epoch it is used to give predictions for a specific dataset (it could be training or validation).
     2) The examples in the dataset are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous" based on the mean and standard deviation in the predictions of the ground truth labels.
-    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, while low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
+    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, while having low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
     args:
         args: the arguments given by the user
         data: the csv file of the dataset for which we compute the confidence and variability.
     returns:
-        the function returns:
         confidence: the mean of the predictions that the debiased model gives to the ground truth label, over multiple epochs.
         variability: the standard deviation of the predictions that the debiased model gives to the groud truth label, over multiple epochs.
     """
@@ -36,11 +35,12 @@ def compute_confidence_and_variability_after_debiasing(
 
     model_after_debiasing = BertForSequenceClassification.from_pretrained(
         args.classifier_model,
-        num_labels=len(set(train_dataset.labels)),
+        num_labels = len(set(train_dataset.labels)),
         output_attentions=args.analyze_attention,
         num_hidden_layers = args.num_hidden_layers,
         hidden_dropout_prob = args.hidden_dropout,
-        attention_probs_dropout_prob = args.attention_dropout
+        attention_probs_dropout_prob = args.attention_dropout,
+        num_attention_heads = args.num_attention_heads
     )
 
     for i in range(args.num_saved_debiased_models):
@@ -113,10 +113,7 @@ def compute_confidence_and_variability_before_debiasing(
     args, train_dataset, val_dataset
 ):
     """
-    Compute the confidence and variability in the model before debiasing as in https://arxiv.org/pdf/2009.10795.pdf as follows:
-    1) The model is trained for multple epochs, and after each epoch it is used to give predictions for a specific dataset (it could be training or validation).
-    2) The examples in the dataset are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous" based on the mean and standard deviation in the predictions of the ground truth labels.
-    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, while low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
+    Compute the confidence and variability in the model before debiasing.
     args:
         args: the arguments given by the user
         data: the csv file of the dataset for which we compute the confidence and variability.
@@ -129,7 +126,7 @@ def compute_confidence_and_variability_before_debiasing(
         tokenizer: the tokenizer used by the biased model
     """
     # Save the model weights after each epoch
-    checkpoint_steps = checkpoint_steps = int(
+    checkpoint_steps = int(
         train_dataset.__len__() / args.batch_size_pretraining
     )
 
@@ -152,7 +149,7 @@ def compute_confidence_and_variability_before_debiasing(
         if(os.path.isdir("./saved_models/checkpoint-" + str(checkpoint_steps * (i+1)))):
             model_before_debiasing = BertForSequenceClassification.from_pretrained(
                 model_path,
-                num_labels=len(set(train_dataset.labels)),
+                num_labels = len(set(train_dataset.labels)),
                 output_attentions=args.analyze_attention,
             )
         else:
@@ -162,14 +159,14 @@ def compute_confidence_and_variability_before_debiasing(
                 model_path = "./saved_models/checkpoint-" + str(checkpoint_steps * i)
                 model_before_debiasing = BertForSequenceClassification.from_pretrained(
                     model_path,
-                    num_labels=len(set(train_dataset.labels)),
+                    num_labels = len(set(train_dataset.labels)),
                     output_attentions=args.analyze_attention,
                 )
             else:
                 model_name = args.classifier_model
                 model_before_debiasing = BertForSequenceClassification.from_pretrained(
                     model_name,
-                    num_labels=len(set(train_dataset.labels)),
+                    num_labels = len(set(train_dataset.labels)),
                     output_attentions=args.analyze_attention,
                 )
             # Define Trainer
@@ -296,7 +293,7 @@ def log_topk_attention_tokens(
     # ===================================================#
 
     # Log the top k tokens that the classification token attends to in the last layer of the biased and de-biased models for each attention head
-    if args.log_top_tokens_each_head == True:
+    if args.log_top_tokens_each_head:
         for model_head in range(number_of_heads):
             top_attention_tokens_biased.append(
                 [
@@ -391,14 +388,13 @@ def analyze_results(args, model):
 
     tokenizer = BertTokenizer.from_pretrained(args.classifier_model, hidden_dropout_prob = args.tokenizer_dropout)
     # Load the de-biased model to compare its performance to the biased one
-    prediction_after_debiasing = []
     prediction_after_debiasing = softmax(
         torch.tensor(test_trainer_after_debiasing.predict(val_dataset)[0])
     )
     # Get te output of the model after debiasing
     y_pred_after_debiasing = torch.argmax(prediction_after_debiasing, axis=1)
     
-    if(args.analyze_attention):
+    if args.analyze_attention:
         data = log_topk_attention_tokens(
             args,
             data,
