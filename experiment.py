@@ -47,7 +47,8 @@ def training_epoch(
     )
 
     #### Log everything
-    logs["training_bias"] = epoch_bias.cpu().numpy()
+    # We divide the bias by this factor to be able to compare it for different lambdas
+    logs["training_bias"] = epoch_bias.cpu().numpy()/(np.sqrt(args.lambda_data)**2 + np.sqrt(args.lambda_gender)**2)
     if args.approach == "policy_gradient":
         # We only log the reward if we are doing policy gradient
         logs["training_reward_mean"] = epoch_reward.cpu().numpy()
@@ -67,7 +68,6 @@ def validation_epoch(
     tokenizer,
     model,
     best_validation_reward,
-    maximum_bias,
     val_dataset,
 ):
     """
@@ -80,7 +80,6 @@ def validation_epoch(
         tokenizer: the tokenizer used before giving the sentences to the classifier
         model: the pretrained classifier
         best_validation_reward: the best validation reward that we use for model
-        maximum bias: the maximum bias on the validation dataset (bias due to bot gender and paraphrasing)
         selection
         val_dataset: the validation data object
     returns:
@@ -103,25 +102,24 @@ def validation_epoch(
         )
 
         #### Log everything
-        logs["validation_bias"] = epoch_bias.cpu().numpy()
+        # We divide the bias by this factor so that we can compare the bias for different values of lambda.
+        logs["validation_bias"] = (epoch_bias.cpu().numpy())/(np.sqrt(args.lambda_data)**2 + np.sqrt(args.lambda_gender)**2)
         if args.approach == "policy_gradient":
             # We only log the reward if we are doing policy gradient
             logs["validation_reward_mean"] = epoch_reward.cpu().numpy()
         logs["validation_accuracy"] = epoch_accuracy.cpu().numpy()
         # We add 1 because python starts with 0 instead of 1
         logs["epoch"] = epoch + 1
-        if(args.use_wandb):
+        if args.use_wandb:
             wandb.log(logs)
 
-        if(epoch_bias > maximum_bias):
-            maximum_bias = epoch_bias
         # if the developmenet accuracy is better than the best developement
         # reward, we save the model weights.
         # We divide by the maximum bias to make sure both the accureacy and bias
         # are between 0 and 1. We add a small number in the denominator to
         # avoid dividing by 0
-        if (epoch_accuracy - (epoch_bias/(maximum_bias+0.001))) > best_validation_reward:
-            best_validation_reward = epoch_accuracy - (epoch_bias/(maximum_bias+0.001))
+        if epoch_accuracy > best_validation_reward:
+            best_validation_reward = epoch_accuracy
             torch.save(
                 model.state_dict(),
                 "./saved_models/"
@@ -145,7 +143,7 @@ def validation_epoch(
                 + "_debiased_best.pt",
             )
 
-    return loss, best_validation_reward, maximum_bias
+    return loss, best_validation_reward
 
 
 def test_epoch(
@@ -254,8 +252,8 @@ def epoch_loss(
                 ]
             ).to(device),
         )[0]
-        if(args.use_auxiliary_loss):
-          # There is no gender swapping in CLP
+        
+        if args.use_auxiliary_loss:
           results_gender_swap = model.forward(
               input_ids=torch.tensor(
                   dataset.encodings_gender_swap["input_ids"][
@@ -273,7 +271,8 @@ def epoch_loss(
                   ]
               ).to(device),
           )[0]
-        if(args.use_auxiliary_loss or args.method=="CLP"):  
+        # CLP is the counterfactual logit pairing baseline in https://arxiv.org/abs/1809.10610
+        if args.use_auxiliary_loss or args.method=="CLP":  
             results_pharaphrasing = model.forward(
                 input_ids=torch.tensor(
                     dataset.encodings_paraphrasing["input_ids"][
@@ -356,7 +355,7 @@ def epoch_loss(
             if args.use_auxiliary_loss or args.method == "CLP":
                 # We create a mask that lets us apply the bias penalty only to the examples that have a groundtruth label of 0
                 mask = (1 - torch.tensor(dataset.labels[i * args.batch_size : (i + 1) * args.batch_size])).to(device)
-                if(args.method != "CLP"):
+                if args.use_auxiliary_loss:
                   bias_gender = args.lambda_gender * torch.norm(
                       results_original_gender - results_gender_swap,
                       dim=1,
@@ -367,15 +366,20 @@ def epoch_loss(
                     dim=1,
                     p=norm_p_value,
                 ).to(device)
-                if args.use_auxiliary_loss:
-                    bias = bias_data + torch.mul(bias_gender,mask)
-                elif args.method == "CLP":
+                if args.use_auxiliary_loss and args.method != "CLP":
+                    # bias = bias_data + torch.mul(bias_gender,mask)
+                    bias = bias_data + bias_gender
+                elif args.use_auxiliary_loss==False and args.method == "CLP":
+                    bias = torch.mul(bias_data,mask)
                     # if the method used is CLP, then we only need the bias due to counterfactual logit difference
                     # https://dl.acm.org/doi/pdf/10.1145/3306618.3317950
                     
                     # this mask is true when the sentence is not toxic and vice versa, as explained in the paper.
                     # We only consider the bias term when the sentence is not toxic
-                    bias = torch.mul(bias_data,mask)
+                else:
+                    # If we are using CLP and the auxiliary loss
+                    # bias = torch.mul(bias_data,mask) + torch.mul(bias_gender,mask)
+                    bias = torch.mul(bias_data,mask) + bias_gender
                     
                 batch_bias.append(torch.tensor(bias))
                 epoch_bias += torch.sum(torch.stack(batch_bias)) / args.batch_size
@@ -384,7 +388,7 @@ def epoch_loss(
 
             output_dim = results_original_gender.shape[1]
 
-            if ((args.method == "baseline_data_augmentation" or args.method == "baseline_data_substitution") and args.use_auxiliary_loss==False):
+            if args.method in ["baseline_data_augmentation","baseline_data_substitution"] and args.use_auxiliary_loss==False:
                 # This baseline method fine-tunes based only on cross entropy,
                 # without the additional term for the loss due to bias term
                 # (unlike ours).
@@ -406,7 +410,7 @@ def epoch_loss(
                     )
                     + torch.mean(torch.Tensor.float(bias)).item()
                 )
-        if compute_gradient == True:
+        if compute_gradient:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -442,6 +446,31 @@ def run_experiment(args, run):
         )
     # Define pretrained tokenizer and mode
     model, tokenizer = train_classifier(args)
+    
+    # save the best biased model
+    torch.save(
+        model.state_dict(),
+        "./saved_models/"
+        + args.classifier_model
+        + "_"
+        + args.method
+        + "_"
+        + args.approach
+        + "_"
+        + args.dataset
+        +
+        "_aux_loss_"
+        +
+        str(args.use_auxiliary_loss)                
+        + "_"
+        + args.norm
+        + "_"
+        +str(args.lambda_gender)
+        + "_"
+        + str(args.lambda_data)                   
+        + "_biased_best.pt",
+    )
+            
     model = model.to(device)
     optimizer = Adam(model.parameters(), lr=args.learning_rate)
 
@@ -449,7 +478,6 @@ def run_experiment(args, run):
     train_dataset, val_dataset, test_dataset = data_loader(args, apply_data_augmentation = (args.method == "baseline_data_augmentation"), apply_data_substitution = (args.method == "baseline_data_substitution"))
 
     best_validation_reward = torch.tensor(-float("inf")).to(device)
-    maximum_bias = torch.tensor(0).to(device)
     for epoch in range(args.num_epochs):
         training_loss = training_epoch(
             epoch,
@@ -460,7 +488,7 @@ def run_experiment(args, run):
             model,
             train_dataset,
         )
-        validation_loss, best_validation_reward, maximum_bias = validation_epoch(
+        validation_loss, best_validation_reward = validation_epoch(
             epoch,
             args,
             optimizer,
@@ -468,10 +496,9 @@ def run_experiment(args, run):
             tokenizer,
             model,
             best_validation_reward,
-            maximum_bias,
             val_dataset,
         )
-        if epoch < args.num_saved_debiased_models and args.analyze_results == True:
+        if epoch < args.num_saved_debiased_models and args.analyze_results:
             torch.save(
                 model.state_dict(),
                 "./saved_models/"
