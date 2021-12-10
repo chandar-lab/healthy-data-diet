@@ -3,6 +3,7 @@ from transformers import BertTokenizer, BertForSequenceClassification
 from transformers import EarlyStoppingCallback
 from model.data_loader import data_loader
 from sklearn.metrics import roc_auc_score
+from pathlib import Path
 import torch
 import json
 import numpy as np
@@ -23,6 +24,10 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
     2) Accuracy
     3) FNED
     4) FPED
+    5) TNED
+    6) TPED
+    7) Demographic parity
+    8) Equality of odds    
     args:
         model_after_bias_reduction: the model after updating its weights due to bias reduction
         args: the arguments given by the user
@@ -30,140 +35,100 @@ def assess_performance_and_bias(model_after_bias_reduction, args, run):
     returns:
         the function doesnt return anything, since all the metrics are saved in json files.
     """
+    all_metrics = []
     # We need to load the datasets on which we measure the metrics.
     train_dataset, val_dataset, test_dataset, IPTTS_dataset = data_loader(args, IPTTS=True, apply_data_augmentation = (args.method == "baseline_data_augmentation"), apply_data_substitution = (args.method == "baseline_data_substitution"))
 
 
-    if(args.method == "baseline_data_augmentation"):
+    if args.method == "baseline_data_augmentation":
         # In data augmentation, the model before bias reduction had half the number of examples
         checkpoint_steps = (
             int((train_dataset.__len__()/2) / args.batch_size_pretraining)
-            * args.num_epochs_pretraining
         )
     else:
         checkpoint_steps = (
             int(train_dataset.__len__() / args.batch_size_pretraining)
-            * args.num_epochs_pretraining
-        )        
+        )         
     
 
     model_path = "./saved_models/checkpoint-" + str(checkpoint_steps)
     model_before_bias_reduction = BertForSequenceClassification.from_pretrained(
         model_path, num_labels=len(set(val_dataset.labels)), output_attentions=args.analyze_attention
     ).to(device)
+    
+    # Load the model that has the best performance on the validation data
+    model_before_bias_reduction.load_state_dict(
+        torch.load(
+            "./saved_models/"
+            + args.classifier_model
+            + "_"
+            + args.method
+            + "_"
+            + args.approach
+            + "_"
+            + args.dataset
+            +
+            "_aux_loss_"
+            +
+            str(args.use_auxiliary_loss)            
+            + "_"
+            + args.norm
+            + "_"
+            + str(args.lambda_gender)
+            + "_"
+            + str(args.lambda_data)             
+            + "_biased_best.pt",
+            map_location=device,
+        )
+    )        
 
     for split_name, split in zip(
         ["test", "validation", "IPTTS"], [test_dataset, val_dataset, IPTTS_dataset]
     ):
 
         # We compute the metrics that we need by calling this function
-        AUC, accuracy, FPED, FNED = compute_metrics(
+        AUC, accuracy, FPED, FNED, TPED, TNED, demographic_parity, equality_of_odds = compute_metrics(
             split,
             split_name,
             args.dataset,
             model_before_bias_reduction,
             model_after_bias_reduction,
             args.batch_size,
+            args,
         )
 
-        # We now save the metrics in json files
-        output_file = (
-            "./output/AUC/"
-            + split_name
-            + "_AUC_"
-            + args.method
-            + "_"
-            + args.approach
-            + "_"
-            + args.dataset
-            +
-            "_aux_loss_"
-            +
-            str(args.use_auxiliary_loss)            
-            + "_"
-            + args.norm
-            + "_"
-            +str(args.lambda_gender)
-            + "_"
-            + str(args.lambda_data)       
-            + ".json"
-        )
-        with open(output_file, "w+") as f:
-            json.dump(AUC, f, indent=2)
+        if(split_name == "IPTTS"):
+            for metric in [FPED, FNED, TPED, TNED, demographic_parity, equality_of_odds]:             
+                all_metrics.append(metric)
+        else:            
+            for metric in [AUC, accuracy]:
+                all_metrics.append(metric)
 
-        output_file = (
-            "./output/accuracy/"
-            + split_name
-            + "_accuracy_"
-            + args.method
-            + "_"
-            + args.approach
-            + "_"
-            + args.dataset
-            +
-            "_aux_loss_"
-            +
-            str(args.use_auxiliary_loss)            
-            + "_"
-            + args.norm
-            + "_"
-            +str(args.lambda_gender)
-            + "_"
-            + str(args.lambda_data)            
-            + ".json"
-        )
-        with open(output_file, "w+") as f:
-            json.dump(accuracy, f, indent=2)
-
-        if split_name == "IPTTS":
-            # If the dataset is the IPTTS dataset, we also save the FPED and FNED.
-            output_file = (
-                "./output/FPED/"
-                + split_name
-                + "_FPED_"
-                + args.method
-                + "_"
-                + args.approach
-                + "_"
-                + args.dataset
-                +
-                "_aux_loss_"
-                +
-                str(args.use_auxiliary_loss)
-                + "_"
-                + args.norm
-                + "_"
-                +str(args.lambda_gender)
-                + "_"
-                + str(args.lambda_data)                
-                + ".json"
-            )
-            with open(output_file, "w+") as f:
-                json.dump(FPED, f, indent=2)
-
-            output_file = (
-                "./output/FNED/"
-                + split_name
-                + "_FNED_"
-                + args.method
-                + "_"
-                + args.approach
-                + "_"
-                + args.dataset
-                +
-                "_aux_loss_"
-                +
-                str(args.use_auxiliary_loss)                
-                + "_"
-                + args.norm
-                + "_"
-                +str(args.lambda_gender)
-                + "_"
-                + str(args.lambda_data)          
-                + ".json"
-            )
-            with open(output_file, "w+") as f:
-                json.dump(FNED, f, indent=2)
+    # We create a directory for saving the metrics, if it doesnt exist
+    file_directory = (
+        "./output/"
+        + args.method
+        + "_"
+        + args.dataset
+        +
+        "_aux_loss_"
+        +
+        str(args.use_auxiliary_loss)            
+        + "_"
+        + args.norm
+        + "_"
+        +str(args.lambda_gender)
+        + "_"
+        + str(args.lambda_data)            
+    )           
+    
+    Path(file_directory).mkdir(parents=True, exist_ok=True)        
+    
+    # We now save the metrics in a json file
+    output_file = (file_directory + "/metrics.json")
+    with open(output_file, "w+") as f:
+        json.dump(all_metrics, f, indent=2)
+                
 
 
 def compute_metrics(
@@ -173,6 +138,7 @@ def compute_metrics(
     model_before_bias_reduction,
     model_after_bias_reduction,
     batch_size,
+    args,
 ):
     """
     Compute the performance and bias metrics before and after applying our
@@ -193,9 +159,17 @@ def compute_metrics(
         AUC = {}
         FPR = {}
         FNR = {}
+        TPR = {}
+        TNR = {}        
         FPED = {}
         FNED = {}
-
+        TPED = {}
+        TNED = {}
+        demographic_parity = {}
+        equal_opportunity_y_equal_0 = {}
+        equal_opportunity_y_equal_1 = {}
+        equality_of_odds = {}
+        
         num_labels = len(set(split_dataset.labels))
         y_pred_after_bias_reduction = torch.ones([0, num_labels]).to(device)
         y_pred_before_bias_reduction = torch.ones([0, num_labels]).to(device)
@@ -254,14 +228,14 @@ def compute_metrics(
             )
         # ===================================================#
         # Here we calculate the accuracy
-        accuracy["before_bias_reduction"] = (
+        accuracy[split_name + " accuracy before bias reduction"] = (
             torch.sum(
                 torch.argmax(y_pred_before_bias_reduction, axis=1).to(device)
                 == torch.tensor(split_dataset.labels).to(device)
             )
             / len(split_dataset.labels)
         ).tolist()
-        accuracy["after_bias_reduction"] = (
+        accuracy[split_name + " accuracy after bias reduction"] = (
             torch.sum(
                 torch.argmax(y_pred_after_bias_reduction, axis=1).to(device)
                 == torch.tensor(split_dataset.labels).to(device)
@@ -271,11 +245,11 @@ def compute_metrics(
 
         # ===================================================#
         # Here we calculate the AUC score
-        AUC["before_bias_reduction"] = roc_auc_score(
+        AUC[split_name + " AUC before bias reduction"] = roc_auc_score(
             np.array(split_dataset.labels),
             np.array(F.softmax(y_pred_before_bias_reduction, 1).cpu())[:, 1],
         )
-        AUC["after_bias_reduction"] = roc_auc_score(
+        AUC[split_name + " AUC after bias reduction"] = roc_auc_score(
             np.array(split_dataset.labels),
             np.array(F.softmax(y_pred_after_bias_reduction, 1).cpu())[:, 1],
         )
@@ -323,11 +297,55 @@ def compute_metrics(
             )
             / torch.sum(torch.tensor(split_dataset.labels).to(device) == 1)
         ).tolist()
+        
+        # ===================================================#
+        # Here we calculate the TNR
+
+        TPR["before_bias_reduction"] = (
+            torch.sum(
+                torch.logical_and(
+                    torch.argmax(y_pred_before_bias_reduction, axis=1).to(device) == 1,
+                    torch.tensor(split_dataset.labels).to(device) == 1,
+                )
+            )
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 1)
+        ).tolist()
+        TPR["after_bias_reduction"] = (
+            torch.sum(
+                torch.logical_and(
+                    torch.argmax(y_pred_after_bias_reduction, axis=1).to(device) == 1,
+                    torch.tensor(split_dataset.labels).to(device) == 1,
+                )
+            )
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 1)
+        ).tolist()
 
         # ===================================================#
+        # Here we calculate the TPR
+
+        TNR["before_bias_reduction"] = (
+            torch.sum(
+                torch.logical_and(
+                    torch.argmax(y_pred_before_bias_reduction, axis=1).to(device) == 0,
+                    torch.tensor(split_dataset.labels).to(device) == 0,
+                )
+            )
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 0)
+        ).tolist()
+        TNR["after_bias_reduction"] = (
+            torch.sum(
+                torch.logical_and(
+                    torch.argmax(y_pred_after_bias_reduction, axis=1).to(device) == 0,
+                    torch.tensor(split_dataset.labels).to(device) == 0,
+                )
+            )
+            / torch.sum(torch.tensor(split_dataset.labels).to(device) == 0)
+        ).tolist()
+
+        # ===================================================#         
         # Here we calculate the FNED and FPED metrics, as described in https://arxiv.org/pdf/2004.14088.pdf
-        if split_name == "IPTTS":
-            if(dataset_name == "Twitter_sexism_dataset" or dataset_name == "Twitter_toxicity_dataset"):
+        if split_name == "IPTTS":          
+            if dataset_name in ["Twitter_sexism_dataset", "Twitter_toxicity_dataset"]:
                 data_IPTTS = pd.read_csv("./data/" + "madlib.csv")
                 idxs_male = [
                     i
@@ -342,24 +360,94 @@ def compute_metrics(
             elif (dataset_name == "Wikipedia_toxicity_dataset" or dataset_name == "Jigsaw_toxicity_dataset"):
                 data_IPTTS = pd.read_csv("./data/" + "bias_madlibs_77k.csv")
                 idxs_male = list(data_IPTTS[data_IPTTS["text"].str.contains(" male")].index.values)
-                idxs_female = list(data_IPTTS[data_IPTTS["text"].str.contains(" female")].index.values)                
-            # We just initialize the FNED and FPED to zeros, before we compute them.
-            FPED["before_bias_reduction"], FPED["after_bias_reduction"] = 0, 0
-            FNED["before_bias_reduction"], FNED["after_bias_reduction"] = 0, 0
+                idxs_female = list(data_IPTTS[data_IPTTS["text"].str.contains(" female")].index.values)  
+                
+            # Saving the model's predcitions before and after debiasing, on the 
+            # IPTTs dataset.
+            data_IPTTS["predcition before debiasing"] = list(
+                F.softmax(y_pred_before_bias_reduction, 1)[:, 1].cpu().detach().numpy()
+            )
+            data_IPTTS["prediction after debiasing"] = list(
+                F.softmax(y_pred_after_bias_reduction, 1)[:, 1].cpu().detach().numpy()
+            )
 
+            data_IPTTS.to_csv(
+                "./output/analysis/bias_analysis"
+                + "_"
+                + args.method
+                + "_"
+                + args.approach
+                + "_"
+                + dataset_name
+                +
+                "_aux_loss_"
+                +
+                str(args.use_auxiliary_loss)        
+                + "_"
+                + args.norm        
+                + ".csv",
+                index=False,
+            )          
+            
+            # We just initialize the FNED and FPED to zeros, before we compute them.
+            FPED["FPED before bias reduction"], FPED["FPED after bias reduction"] = 0, 0
+            FNED["FNED before bias reduction"], FNED["FNED after bias reduction"] = 0, 0
+            TPED["TPED before bias reduction"], TPED["TPED after bias reduction"] = 0, 0
+            TNED["TNED before bias reduction"], TNED["TNED after bias reduction"] = 0, 0   
+            equal_opportunity_y_equal_0["before_bias_reduction"] = torch.tensor(0).to(device)
+            equal_opportunity_y_equal_0["after_bias_reduction"] = torch.tensor(0).to(device)
+            equal_opportunity_y_equal_1["before_bias_reduction"] = torch.tensor(0).to(device)
+            equal_opportunity_y_equal_1["after_bias_reduction"] = torch.tensor(0).to(device)
+            num_positive_examples = torch.sum(torch.tensor(split_dataset.labels).to(device) == 1)
+            num_negative_examples = torch.sum(torch.tensor(split_dataset.labels).to(device) == 0)            
             for idx in [idxs_male, idxs_female]:
                 num_positive_examples = torch.sum(torch.tensor(split_dataset.labels).to(device)[idx] == 1)
-                num_negative_examples = torch.sum(torch.tensor(split_dataset.labels).to(device)[idx] == 0)
+                num_negative_examples = torch.sum(torch.tensor(split_dataset.labels).to(device)[idx] == 0)                
                 pred_before_bias_reduction = torch.argmax(y_pred_before_bias_reduction,axis = 1).to(device)[idx]
                 pred_after_bias_reduction = torch.argmax(y_pred_after_bias_reduction,axis = 1).to(device)[idx]
                 ground_truth = torch.tensor(split_dataset.labels).to(device)[idx]
-                FPED["before_bias_reduction"] += torch.abs(FPR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 1, ground_truth == 0))/num_negative_examples)).tolist()
-                FPED["after_bias_reduction"] += torch.abs(FPR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 1, ground_truth == 0))/num_negative_examples)).tolist()
+
+                FPED["FPED before bias reduction"] += torch.abs(FPR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 1, ground_truth == 0))/num_negative_examples)).tolist()
+                FPED["FPED after bias reduction"] += torch.abs(FPR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 1, ground_truth == 0))/num_negative_examples)).tolist()
   
-                FNED["before_bias_reduction"] += torch.abs(FNR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 0, ground_truth == 1))/num_positive_examples)).tolist()
-                FNED["after_bias_reduction"] += torch.abs(FNR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 0, ground_truth == 1))/num_positive_examples)).tolist()
+                FNED["FNED before bias reduction"] += torch.abs(FNR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 0, ground_truth == 1))/num_positive_examples)).tolist()
+                FNED["FNED after bias reduction"] += torch.abs(FNR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 0, ground_truth == 1))/num_positive_examples)).tolist()
+                
+                TPED["TPED before bias reduction"] += torch.abs(TPR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 1, ground_truth == 1))/num_positive_examples)).tolist()
+                TPED["TPED after bias reduction"] += torch.abs(TPR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 1, ground_truth == 1))/num_positive_examples)).tolist()
+  
+                TNED["TNED before bias reduction"] += torch.abs(TNR["before_bias_reduction"]-(torch.sum(torch.logical_and(pred_before_bias_reduction == 0, ground_truth == 0))/num_negative_examples)).tolist()
+                TNED["TNED after bias reduction"] += torch.abs(TNR["after_bias_reduction"]-(torch.sum(torch.logical_and(pred_after_bias_reduction == 0, ground_truth == 0))/num_negative_examples)).tolist()
+
+                equal_opportunity_y_equal_0["before_bias_reduction"] = torch.abs(equal_opportunity_y_equal_0["before_bias_reduction"]) - (torch.sum(torch.logical_and(pred_before_bias_reduction == 1, ground_truth == 0))/num_negative_examples)
+                equal_opportunity_y_equal_1["before_bias_reduction"] = torch.abs(equal_opportunity_y_equal_1["before_bias_reduction"]) - (torch.sum(torch.logical_and(pred_before_bias_reduction == 1, ground_truth == 1))/num_positive_examples)
+                
+                equal_opportunity_y_equal_0["after_bias_reduction"] = torch.abs(equal_opportunity_y_equal_0["after_bias_reduction"]) - (torch.sum(torch.logical_and(pred_after_bias_reduction == 1, ground_truth == 0))/num_negative_examples)
+                equal_opportunity_y_equal_1["after_bias_reduction"] = torch.abs(equal_opportunity_y_equal_1["after_bias_reduction"]) - (torch.sum(torch.logical_and(pred_after_bias_reduction == 1, ground_truth == 1))/num_positive_examples)
+
+
+            demographic_parity["demographic_parity before bias reduction"] = 1 - torch.abs(
+                torch.mean(torch.argmax(y_pred_before_bias_reduction,axis = 1).double().to(device)[idxs_male])
+                - torch.mean(torch.argmax(y_pred_before_bias_reduction,axis = 1).double().to(device)[idxs_female])
+            ).tolist()    
+
+            demographic_parity["demographic_parity after bias reduction"] = 1 - torch.abs(
+                torch.mean(torch.argmax(y_pred_after_bias_reduction,axis = 1).double().to(device)[idxs_male])
+                - torch.mean(torch.argmax(y_pred_after_bias_reduction,axis = 1).double().to(device)[idxs_female])
+            ).tolist()
+                
+            equal_opportunity_y_equal_0["before_bias_reduction"] = 1- torch.abs(equal_opportunity_y_equal_0["before_bias_reduction"])
+            equal_opportunity_y_equal_1["before_bias_reduction"] = 1- torch.abs(equal_opportunity_y_equal_1["before_bias_reduction"])
+            
+            equal_opportunity_y_equal_0["after_bias_reduction"] =  1- torch.abs(equal_opportunity_y_equal_0["after_bias_reduction"])     
+            equal_opportunity_y_equal_1["after_bias_reduction"] =  1- torch.abs(equal_opportunity_y_equal_1["after_bias_reduction"]) 
+            
+            equality_of_odds["equality_of_odds before bias reduction"] = 0.5 * (equal_opportunity_y_equal_0["before_bias_reduction"] + equal_opportunity_y_equal_1["before_bias_reduction"]).tolist()
+            equality_of_odds["equality_of_odds after bias reduction"] = 0.5 * (equal_opportunity_y_equal_0["after_bias_reduction"] + equal_opportunity_y_equal_1["after_bias_reduction"]).tolist()
+
     
-        return AUC, accuracy, FPED, FNED
+        return AUC, accuracy, FPED, FNED, TPED, TNED, demographic_parity, equality_of_odds
+    
 
 
 # Some of the following parts are taken from
@@ -379,8 +467,7 @@ def train_classifier(args):
         classifier model
     """
     # Load the dataset
-    train_dataset, val_dataset, test_dataset = data_loader(
-        args)
+    train_dataset, val_dataset, test_dataset = data_loader(args)
     # The number of epochs afterwhich we save the model. We set it to this
     # value to only save the last model.
     checkpoint_steps = (
@@ -397,6 +484,32 @@ def train_classifier(args):
             output_attentions=args.analyze_attention,
         )
 
+        # Load the model that has the best performance on the validation data
+        model.load_state_dict(
+            torch.load(
+                "./saved_models/"
+                + args.classifier_model
+                + "_"
+                + args.method
+                + "_"
+                + args.approach
+                + "_"
+                + args.dataset
+                +
+                "_aux_loss_"
+                +
+                str(args.use_auxiliary_loss)            
+                + "_"
+                + args.norm
+                + "_"
+                + str(args.lambda_gender)
+                + "_"
+                + str(args.lambda_data)             
+                + "_biased_best.pt",
+                map_location=device,
+            )
+        )        
+
     else:
         # Define pretrained tokenizer and model
         model_name = args.classifier_model
@@ -408,7 +521,8 @@ def train_classifier(args):
             output_attentions = args.analyze_attention,
             num_hidden_layers = args.num_hidden_layers,
             hidden_dropout_prob = args.hidden_dropout,
-            attention_probs_dropout_prob = args.attention_dropout
+            attention_probs_dropout_prob = args.attention_dropout,
+            num_attention_heads = args.num_attention_heads
         )
 
         # Define Trainer parameters
