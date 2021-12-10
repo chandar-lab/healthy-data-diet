@@ -62,43 +62,44 @@ def data_loader(args, subset=None, apply_data_augmentation=None, apply_data_subs
         data_train = pd.read_csv("./data/" + args.dataset + "_train_original_gender.csv")
         data_valid = pd.read_csv("./data/" + args.dataset + "_valid_original_gender.csv")
         data_test = pd.read_csv("./data/" + args.dataset + "_test_original_gender.csv")
+ 
+    # The gender swap means that we flip the gender in each example in out dataset.
+    # For example, the sentence "he is a doctor" becomes "she is a doctor".
+    data_train_gender_swap = pd.read_csv(
+        "./data/" + args.dataset + "_train_gender_swap.csv"
+    )
+    data_valid_gender_swap = pd.read_csv(
+        "./data/" + args.dataset + "_valid_gender_swap.csv"
+    )
+    data_test_gender_swap = pd.read_csv(
+        "./data/" + args.dataset + "_test_gender_swap.csv"
+    )
 
-    if(args.method!="CLP"):
-      # We don't do gender swapping in CLP  
-      # The gender swap means that we flip the gender in each example in out dataset.
-      # For example, the sentence "he is a doctor" becomes "she is a doctor".
-      data_train_gender_swap = pd.read_csv(
-          "./data/" + args.dataset + "_train_gender_swap.csv"
-      )
-      data_valid_gender_swap = pd.read_csv(
-          "./data/" + args.dataset + "_valid_gender_swap.csv"
-      )
-      data_test_gender_swap = pd.read_csv(
-          "./data/" + args.dataset + "_test_gender_swap.csv"
-      )
-
-      # This is a boolean tensor that indentifies the examples that have undergone gender swapping
-      train_gender_swap = torch.tensor(
-          data_train[data_train.columns[0]]
-          != data_train_gender_swap[data_train_gender_swap.columns[0]]
-      )
-      valid_gender_swap = torch.tensor(
-          data_valid[data_valid.columns[0]]
-          != data_valid_gender_swap[data_valid_gender_swap.columns[0]]
-      )
-      test_gender_swap = torch.tensor(
-          data_test[data_test.columns[0]]
-          != data_test_gender_swap[data_test_gender_swap.columns[0]]
-      )
+    # This is a boolean tensor that indentifies the examples that have undergone gender swapping
+    train_gender_swap = torch.tensor(
+        data_train[data_train.columns[0]]
+        != data_train_gender_swap[data_train_gender_swap.columns[0]]
+    )
+    valid_gender_swap = torch.tensor(
+        data_valid[data_valid.columns[0]]
+        != data_valid_gender_swap[data_valid_gender_swap.columns[0]]
+    )
+    test_gender_swap = torch.tensor(
+        data_test[data_test.columns[0]]
+        != data_test_gender_swap[data_test_gender_swap.columns[0]]
+    )
 
     # The paraphrasing means that we each sentence in a different way, while
     # preserving the meaning. For example, the sentence "I really liked the movie"
-    # becomes "I enjoyed the movie".
+    # becomes "I enjoyed the movie". For CLP, we just replace certain identity
+    # words with other words from a fixed template. The term "data augmentation"
+    # should not be confused with the baseline data augmentation, the term here
+    # only refers to sentences that have a similar meaning.
     X_train_paraphrased = list(data_train["data augmentation"])
     X_valid_paraphrased = list(data_valid["data augmentation"])
     X_test_paraphrased = list(data_test["data augmentation"])
     
-    if apply_data_augmentation == True:
+    if apply_data_augmentation:
         # We also duplicate the paraphrased examples
         X_train_paraphrased = list(data_train["data augmentation"]) + list(data_train["data augmentation"])
         X_valid_paraphrased = list(data_valid["data augmentation"]) + list(data_valid["data augmentation"])
@@ -136,7 +137,7 @@ def data_loader(args, subset=None, apply_data_augmentation=None, apply_data_subs
             [data_test_gender_swap, data_test.iloc[0:len(data_test_gender_swap)]], axis=0, ignore_index=True
         )        
                 
-    if apply_data_substitution == True:
+    if apply_data_substitution:
         # We substitute each example with the gender-flipped one, with a probability of 0.5, 
         # as described in https://arxiv.org/abs/1909.00871
         for i in range(len(data_train)):
@@ -158,24 +159,23 @@ def data_loader(args, subset=None, apply_data_augmentation=None, apply_data_subs
     X_test = list(data_test[data_test.columns[0]])
     y_test = list(data_test[data_test.columns[1]])
 
-    if(args.method!="CLP"):
-      # As mentioned before, the gender swapping is not done in CLP
-      X_train_gender_swap = list(
-          data_train_gender_swap[data_train_gender_swap.columns[0]]
-      )    
-      X_val_gender_swap = list(data_valid_gender_swap[data_valid_gender_swap.columns[0]])
 
-      X_test_gender_swap = list(data_test_gender_swap[data_test_gender_swap.columns[0]])
-      
-      X_train_gender_swap_tokenized = tokenizer(
-          X_train_gender_swap, padding=True, truncation=True, max_length=args.max_length
-      )
-      X_val_gender_swap_tokenized = tokenizer(
-          X_val_gender_swap, padding=True, truncation=True, max_length=args.max_length
-      )
-      X_test_gender_swap_tokenized = tokenizer(
-          X_test_gender_swap, padding=True, truncation=True, max_length=args.max_length
-      )
+    X_train_gender_swap = list(
+        data_train_gender_swap[data_train_gender_swap.columns[0]]
+    )    
+    X_val_gender_swap = list(data_valid_gender_swap[data_valid_gender_swap.columns[0]])
+
+    X_test_gender_swap = list(data_test_gender_swap[data_test_gender_swap.columns[0]])
+    
+    X_train_gender_swap_tokenized = tokenizer(
+        X_train_gender_swap, padding=True, truncation=True, max_length=args.max_length
+    )
+    X_val_gender_swap_tokenized = tokenizer(
+        X_val_gender_swap, padding=True, truncation=True, max_length=args.max_length
+    )
+    X_test_gender_swap_tokenized = tokenizer(
+        X_test_gender_swap, padding=True, truncation=True, max_length=args.max_length
+    )
 
 
     X_train_tokenized = tokenizer(
@@ -199,51 +199,34 @@ def data_loader(args, subset=None, apply_data_augmentation=None, apply_data_subs
         X_test_paraphrased, padding=True, truncation=True, max_length=args.max_length
     )
 
-    if(args.method!="CLP"):
-      # There is no gender swapping in CLP
-      train_dataset = Dataset(
-          encodings = X_train_tokenized,
-          encodings_gender_swap = X_train_gender_swap_tokenized,
-          encodings_paraphrasing = X_train_paraphrased_tokenized,
-          gender_swap = train_gender_swap,
-          labels = y_train,
-      )
-      val_dataset = Dataset(
-          encodings = X_val_tokenized,
-          encodings_gender_swap = X_val_gender_swap_tokenized,
-          encodings_paraphrasing = X_val_paraphrased_tokenized,
-          gender_swap = valid_gender_swap,
-          labels = y_val,
-      )
-      test_dataset = Dataset(
-          encodings = X_test_tokenized,
-          encodings_gender_swap = X_test_gender_swap_tokenized,
-          encodings_paraphrasing = X_test_paraphrased_tokenized,
-          gender_swap = test_gender_swap,
-          labels = y_test,
-      )
-    else:
-      train_dataset = Dataset(
-          encodings = X_train_tokenized,
-          encodings_paraphrasing = X_train_paraphrased_tokenized,
-          labels = y_train,
-      )
-      val_dataset = Dataset(
-          encodings = X_val_tokenized,
-          encodings_paraphrasing = X_val_paraphrased_tokenized,
-          labels = y_val,
-      )
-      test_dataset = Dataset(
-          encodings = X_test_tokenized,
-          encodings_paraphrasing = X_test_paraphrased_tokenized,
-          labels = y_test,
-      )      
+    train_dataset = Dataset(
+        encodings = X_train_tokenized,
+        encodings_gender_swap = X_train_gender_swap_tokenized,
+        encodings_paraphrasing = X_train_paraphrased_tokenized,
+        gender_swap = train_gender_swap,
+        labels = y_train,
+    )
+    val_dataset = Dataset(
+        encodings = X_val_tokenized,
+        encodings_gender_swap = X_val_gender_swap_tokenized,
+        encodings_paraphrasing = X_val_paraphrased_tokenized,
+        gender_swap = valid_gender_swap,
+        labels = y_val,
+    )
+    test_dataset = Dataset(
+        encodings = X_test_tokenized,
+        encodings_gender_swap = X_test_gender_swap_tokenized,
+        encodings_paraphrasing = X_test_paraphrased_tokenized,
+        gender_swap = test_gender_swap,
+        labels = y_test,
+    )
+    
 
     #IPTTS is a synthetic dataset that is used to compute the fairness metrics
-    if (IPTTS == True):
-        if(args.dataset == "Twitter_sexism_dataset" or args.dataset == "Twitter_toxicity_dataset"):
+    if IPTTS:
+        if args.dataset in ["Twitter_sexism_dataset", "Twitter_toxicity_dataset"]:
             data_IPTTS = pd.read_csv("./data/" + "madlib.csv")
-        elif (args.dataset == "Wikipedia_toxicity_dataset" or args.dataset == "Jigsaw_toxicity_dataset"):
+        elif args.dataset in ["Wikipedia_toxicity_dataset", "Jigsaw_toxicity_dataset"]:
             data_IPTTS = pd.read_csv("./data/" + "bias_madlibs_77k.csv")
         X_IPTTS = list(data_IPTTS[data_IPTTS.columns[0]])
         y_IPTTS = list(data_IPTTS["Class"])
