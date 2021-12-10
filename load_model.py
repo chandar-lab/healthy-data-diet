@@ -40,10 +40,11 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         choices=[
-            "Twitter_sexism_dataset",
-            "HASOC_dataset",
+            "Jigsaw_toxicity_dataset",
             "Wikipedia_toxicity_dataset",
+            "Twitter_sexism_dataset",
             "Twitter_toxicity_dataset",
+
         ],
         default="Twitter_toxicity_dataset",
         help="Type of dataset used",
@@ -142,6 +143,12 @@ def parse_args():
         type=int,
         default=12,
         help='Number of layers in the model')  
+
+    parser.add_argument(
+        '--num_attention_heads',
+        type=int,
+        default=12,
+        help='Number of attention heads in the model')      
     
     parser.add_argument(
         "--log_top_tokens_each_head",
@@ -174,7 +181,8 @@ if __name__ == "__main__":
         output_attentions = args.analyze_attention,
         num_hidden_layers = args.num_hidden_layers,
         hidden_dropout_prob = args.hidden_dropout,
-        attention_probs_dropout_prob = args.attention_dropout
+        attention_probs_dropout_prob = args.attention_dropout,
+        num_attention_heads = args.num_attention_heads
     )
     model = model.to(device)
     model.load_state_dict(
@@ -202,5 +210,5 @@ if __name__ == "__main__":
         )
     )
     assess_performance_and_bias(model, args, run=0)
-    if args.analyze_results == True:
+    if args.analyze_results:
         analyze_results(args, model)
