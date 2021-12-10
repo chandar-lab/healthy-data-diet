@@ -20,7 +20,7 @@ def parse_args():
         default="ours",
         help="Choosing between our work and some of the baseline methods. CLP stands for Counterfactual Logit Pairing",
     )
-    parser.add_argument("--num_runs", type=int, default=5, help="Number of runs to do.")
+    parser.add_argument("--num_runs", type=int, default=1, help="Number of runs to do.")
     parser.add_argument(
         "--approach",
         choices=["policy_gradient", "supervised_learning"],
@@ -71,6 +71,8 @@ def parse_args():
             "Jigsaw_toxicity_dataset",
             "Wikipedia_toxicity_dataset",
             "Twitter_sexism_dataset",
+            "Twitter_toxicity_dataset",
+
         ],
         default="twitter_dataset",
         help="Type of dataset used",
@@ -141,6 +143,11 @@ def parse_args():
         type=int,
         default=12,
         help='Number of layers in the model')  
+    parser.add_argument(
+        '--num_attention_heads',
+        type=int,
+        default=12,
+        help='Number of attention heads in the model')      
     # arguments for analysing the data
     parser.add_argument(
         "--analyze_results",
@@ -180,5 +187,5 @@ if __name__ == "__main__":
     for run in range(args.num_runs):         
         model, tokenizer = run_experiment(args, run)
         assess_performance_and_bias(model, args, run)            
-    if args.analyze_results == True:
+    if args.analyze_results:
         analyze_results(args, model)
