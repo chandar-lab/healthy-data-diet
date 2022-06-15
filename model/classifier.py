@@ -33,7 +33,7 @@ def train_biased_classifier(
     the user's choice.
     args:
         dataset: the dataset used
-        CDA_examples_ranking: the ranking of the CDa examples
+        CDA_examples_ranking: the ranking of the CDA examples
         data_augmentation_ratio: The ratio of data augmentation that we apply, given that the debiasing is using data augmentation
         data_diet_examples_ranking: Type of rankings we use to pick up the examples in data pruning.
         data_diet_factual_ratio: The ratio of the factual examples that we train on while using data diet.
@@ -41,7 +41,7 @@ def train_biased_classifier(
         data_substitution_ratio: The ratio of the dataset examples that are flipped in data substitution.
         max_length: The maximum length of the sentences that we classify (in terms of the number of tokens)
         classifier_model: the model name
-        batch_size_pretraining: the batch size for the pretraiing (training the biase model)
+        batch_size_pretraining: the batch size for the pretraining (training the biased model)
         model_dir: the Directory to the model
         use_amulet: whether or not to run the code on Amulet, which is the cluster used at Microsoft research
         num_epochs_pretraining: the number of epochs to train the biased model, which is done before bias mitigation
@@ -52,6 +52,7 @@ def train_biased_classifier(
     """
     # Load the dataset
     train_dataset, val_dataset, test_dataset = data_loader(
+        seed,
         dataset,
         CDA_examples_ranking,
         data_augmentation_ratio,
@@ -64,11 +65,6 @@ def train_biased_classifier(
     )
     # The number of epochs afterwhich we save the model.
     checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
-
-    if use_amulet:
-        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
 
     if classifier_model in [
         "bert-base-cased",
