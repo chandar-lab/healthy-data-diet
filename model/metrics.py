@@ -15,6 +15,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def assess_performance_and_bias(
+    seed,
     model_after_bias_reduction,
     dataset,
     CDA_examples_ranking,
@@ -49,7 +50,7 @@ def assess_performance_and_bias(
     args:
         model_after_bias_reduction: the model after updating its weights due to bias reduction
         dataset: the dataset used
-        CDA_examples_ranking: the ranking of the CDa examples
+        CDA_examples_ranking: the ranking of the CDA examples
         data_augmentation_ratio: The ratio of data augmentation that we apply, given that the debiasing is using data augmentation
         data_diet_examples_ranking: Type of rankings we use to pick up the examples in data pruning.
         data_diet_factual_ratio: The ratio of the factual examples that we train on while using data diet.
@@ -61,8 +62,8 @@ def assess_performance_and_bias(
         model_dir: the Directory to the model
         use_amulet: whether or not to run the code on Amulet, which is the cluster used at Microsoft research
         method: the debiasing method used
-        batch_size_pretraining: the batch size for the pretraiing (training the biase model)
-        batch_size: trh batch size for the training of the debiased model
+        batch_size_pretraining: the batch size for the pretraining (training the biased model)
+        batch_size: the batch size for the training of the debiased model
         use_wandb: whether or not to use wandb
 
         the function doesnt return anything, since all the metrics are saved in json files.
@@ -76,6 +77,7 @@ def assess_performance_and_bias(
         IPTTS_gender_dataset,
         IPTTS_social_dataset,
     ) = data_loader(
+        seed,
         dataset=dataset,
         CDA_examples_ranking=CDA_examples_ranking,
         data_augmentation_ratio=data_augmentation_ratio,
@@ -89,16 +91,6 @@ def assess_performance_and_bias(
     )
 
     num_labels = len(set(train_dataset.labels))
-    output_dir = output_dir
-    model_dir = model_dir
-
-    if use_amulet:
-        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
-        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
 
@@ -171,6 +163,7 @@ def assess_performance_and_bias(
             for metric in [AUC, accuracy]:
                 all_metrics.append(metric)
 
+
     # We create a directory for saving the metrics, if it doesnt exist
     file_directory = output_dir + dataset + "_" + method + "_" + classifier_model
 
@@ -202,7 +195,7 @@ def compute_metrics(
     args:
         split_dataset: the dataset split object on which the metrics are measured.
         split_name: the name of the split on which the metrics are computed.
-        dataset_name: the nam of the dataset used
+        dataset_name: the name of the dataset used
         model_before_bias_reduction: the model before updating its weights for bias reduction
         model_after_bias_reduction: the model after updating its weights for bias reduction
         batch_size: the size of the batch used
@@ -234,11 +227,6 @@ def compute_metrics(
 
         y_pred_after_bias_reduction = torch.ones([0, num_labels]).to(device)
         y_pred_before_bias_reduction = torch.ones([0, num_labels]).to(device)
-
-        output_dir = output_dir
-
-        if use_amulet:
-            output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
 
         for i in range(int(np.ceil(len(split_dataset) / batch_size))):
 
@@ -336,7 +324,7 @@ def compute_metrics(
         if use_wandb:
             wandb.log(logs)
         # ===================================================#
-        # Here we calculate the FNR
+        # Here we calculate the FPR
 
         FPR["FPR before bias reduction"] = (
             torch.sum(
@@ -358,7 +346,7 @@ def compute_metrics(
         ).tolist()
 
         # ===================================================#
-        # Here we calculate the FPR
+        # Here we calculate the FNR
 
         FNR["FNR before bias reduction"] = (
             torch.sum(
@@ -380,7 +368,7 @@ def compute_metrics(
         ).tolist()
 
         # ===================================================#
-        # Here we calculate the TNR
+        # Here we calculate the TPR
 
         TPR["TPR before bias reduction"] = (
             torch.sum(
@@ -402,7 +390,7 @@ def compute_metrics(
         ).tolist()
 
         # ===================================================#
-        # Here we calculate the TPR
+        # Here we calculate the TNR
 
         TNR["TNR before bias reduction"] = (
             torch.sum(
