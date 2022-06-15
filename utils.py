@@ -17,7 +17,7 @@ softmax = torch.nn.Softmax(dim=1).to(device)
 def detect_gender_words(top_attention_tokens):
     """
     This function detects whether or not the top k tokens to which the CLS token
-    attends contain gender words. This is done by achieved by comparing the tokens
+    attends contain gender words. This is achieved by comparing the tokens
     before and after gender flipping. If they are identical, then there are no
     gender words, and vice versa.
     args:
@@ -48,7 +48,7 @@ def find_biased_examples(dataset_name, data):
     classifies with very high/low p(y|x) according to some threshold. This defninition
     is also followed in this paper: https://arxiv.org/pdf/2010.02458.pdf
     args:
-        dataset_name: the the name of the dataset used
+        dataset_name: the name of the dataset used
         data: the csv file of the dataset that we want to analyze
     returns:
         the function returns the predictions of the logistic regression classifier
@@ -80,7 +80,7 @@ def average_attention_map_all_heads(dataset, model, batch_size):
         batch_size: the size of our batch
     returns:
         the function returns a pytorch tensor that has the summation of the attention
-        map over all the heads in the model for each examples
+        map over all the heads in the model for each example
     """
     all_heads_attention_batch = []
     maximum_tokens = dataset[:]["input_ids"].shape[1]
@@ -138,7 +138,7 @@ def compute_confidence_and_variability(
     returns:
         the function returns:
         confidence: the mean of the predictions that the model gives to the ground truth label, over multiple epochs.
-        variability: the standard deviation of the predictions that the model gives to the groud truth label, over multiple epochs.
+        variability: the standard deviation of the predictions that the model gives to the ground truth label, over multiple epochs.
     """
     # Save the model weights after each epoch
     checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
@@ -154,14 +154,6 @@ def compute_confidence_and_variability(
         huggingface_model = BertForSequenceClassification
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
-
-    if use_amulet:
-        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
-        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     prediction_epoch = []
 
@@ -278,13 +270,13 @@ def log_topk_attention_tokens(
     )
 
     # We look for 3 things:
-    # 1- The top k tokens that the to which the CLS tokens attends.
-    # 2- Their values of their attention weights.
+    # 1- The top k tokens to which the CLS tokens attends.
+    # 2- The values of their attention weights.
     # 3- Whether or not they refer to gender tokens.
     # This is done over all the layers and heads in the model and only for the top k tokens.
     # At the end, for every example, we have 2 values: The sum of the attention weights
-    # over the top k tokens for gender words, and for nongender words. We compare the distribution
-    # of both values in both the biased an debiased models.
+    # over the top k tokens for gender words and for nongender words. We compare the distribution
+    # of both values in both the biased and debiased models.
     top_attention_tokens_biased.append(
         [
             [
