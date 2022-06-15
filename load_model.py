@@ -23,6 +23,7 @@ if __name__ == "__main__":
         )
 
     train_dataset, val_dataset, test_dataset = data_loader(
+        args.seed,
         dataset=args.dataset,
         CDA_examples_ranking=args.CDA_examples_ranking,
         data_augmentation_ratio=args.data_augmentation_ratio,
@@ -55,12 +56,16 @@ if __name__ == "__main__":
     model = model.to(device)
 
     model_dir = args.model_dir
-
+    output_dir = args.output_dir
+    
     if args.use_amulet:
         model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
+        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
 
     Path(model_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+ 
     model.load_state_dict(
         torch.load(
             model_dir
@@ -84,8 +89,8 @@ if __name__ == "__main__":
         args.data_substitution_ratio,
         args.max_length,
         args.classifier_model,
-        args.output_dir,
-        args.model_dir,
+        output_dir,
+        model_dir,
         args.use_amulet,
         args.method,
         args.batch_size_pretraining,
@@ -106,8 +111,8 @@ if __name__ == "__main__":
             args.compute_importance_scores,
             args.num_epochs_pretraining,
             args.batch_size_pretraining,
-            args.output_dir,
-            args.model_dir,
+            output_dir,
+            model_dir,
             args.batch_size,
             args.analyze_attention,
             args.use_amulet,
