@@ -24,6 +24,7 @@ softmax = torch.nn.Softmax(dim=1).to(device)
 
 
 def analyze_results(
+    seed,
     dataset,
     CDA_examples_ranking,
     data_augmentation_ratio,
@@ -53,7 +54,7 @@ def analyze_results(
         are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous". The intuition is to know which category is mostly affected by the de-biasing algorithm.
     args:
         dataset: the dataset used
-        CDA_examples_ranking: the ranking of the CDa examples
+        CDA_examples_ranking: the ranking of the CDA examples
         data_augmentation_ratio: The ratio of data augmentation that we apply, given that the debiasing is using data augmentation
         data_diet_examples_ranking: Type of rankings we use to pick up the examples in data pruning.
         data_diet_factual_ratio: The ratio of the factual examples that we train on while using data diet.
@@ -63,11 +64,11 @@ def analyze_results(
         classifier_model: the model name
         compute_importance_scores: whether or not to compute the importance scores
         num_epochs_pretraining: the number of epochs for the pretraining (training the biased model)
-        batch_size_pretraining: the batch size for the pretraiing (training the biased model)
+        batch_size_pretraining: the batch size for the pretraining (training the biased model)
         output_dir: the output directory that contains the results
         model_dir: the Directory to the model
         batch_size: the batch size for the training of the debiased model
-        analyze_attention: whether or not to copmute the distribution of the attention weights
+        analyze_attention: whether or not to compute the distribution of the attention weights
         use_amulet: whether or not to use Microsoft cluster
         num_epochs_importance_score: the number of epochs that we consider for copmuting the importance scores EL2N and GradN
         num_epochs_confidence_variability: the number fo epochs that we consider while computing the confidence and variability
@@ -77,6 +78,7 @@ def analyze_results(
         the function doesnt return anything, since the output is written in a csv file.
     """
     train_dataset, val_dataset, test_dataset = data_loader(
+        seed,
         dataset,
         CDA_examples_ranking,
         data_augmentation_ratio,
@@ -91,7 +93,7 @@ def analyze_results(
     if compute_importance_scores:
         data_train = pd.read_csv("./data/" + dataset + "_train_original_gender.csv")
         if CDA_examples_ranking == "El2N_fairness":
-            # We can only compute the fairness importance scores model is trained for more than 1 epoch.
+            # We can only compute the fairness importance scores if the model is trained for more than 1 epoch.
             # It is computed on the training dataset, as in https://arxiv.org/pdf/2107.07075.pdf
 
             El2N_fairness_mean = compute_El2N_fairness(
@@ -105,7 +107,7 @@ def analyze_results(
                 train_dataset,
             )
 
-            data_train[CDA_examples_ranking] = list(
+            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
                 El2N_fairness_mean.cpu().detach().numpy()
             )
 
@@ -121,7 +123,7 @@ def analyze_results(
                 train_dataset,
             )
 
-            data_train[CDA_examples_ranking] = list(
+            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
                 El2N_performance_mean.cpu().detach().numpy()
             )
 
@@ -137,7 +139,7 @@ def analyze_results(
                 num_epochs_pretraining,
             )
 
-            data_train[CDA_examples_ranking] = list(
+            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
                 forgetting_scores.cpu().detach().numpy()
             )
 
@@ -152,7 +154,7 @@ def analyze_results(
                 train_dataset,
             )
 
-            data_train[CDA_examples_ranking] = list(GradN.cpu().detach().numpy())
+            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(GradN.cpu().detach().numpy())
 
     for split in ["valid", "test"]:
         data = pd.read_csv("./data/" + dataset + "_" + split + "_original_gender.csv")
@@ -189,14 +191,6 @@ def analyze_results(
             )
 
         checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
-
-        if use_amulet:
-            output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
-            model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-        Path(model_dir).mkdir(parents=True, exist_ok=True)
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
 
         model_checkpoint_path = model_dir + "/checkpoint-" + str(checkpoint_steps)
 
@@ -361,11 +355,8 @@ def analyze_results(
             lambda x: len(re.findall(r"\w+", x))
         )
 
-        if use_amulet:
-            output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
+            
         file_directory = output_dir + "analysis/"
-
         Path(file_directory).mkdir(parents=True, exist_ok=True)
         data.to_csv(
             file_directory
