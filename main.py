@@ -74,6 +74,7 @@ def parse_args():
             "Jigsaw",
             "Wiki",
             "Twitter",
+            "HateBase",
             "EEEC",
         ],
         default="Twitter",
@@ -83,7 +84,7 @@ def parse_args():
         "--num_epochs_pretraining",
         type=int,
         default=1,
-        help="Number of pretraining epochs for the classifier, which is preceeds the debiasing (i.e. the number of epochs for the biased model training).",
+        help="Number of pretraining epochs for the classifier, which precedes the debiasing (i.e. the number of epochs for the biased model training).",
     )
     parser.add_argument(
         "--num_epochs_confidence_variability",
@@ -93,7 +94,7 @@ def parse_args():
     )
     parser.add_argument(
         "--num_epochs_importance_score",
-        type=int,
+        type=float,
         default=1,
         help="Number of training epochs that we consider for computing the El2N and GradN importance scores. Following the paper, we set of to 10% of the number of epochs needed for convergence",
     )
@@ -101,7 +102,7 @@ def parse_args():
         "--batch_size_pretraining",
         type=int,
         default=32,
-        help="Batch size for the classifier dring pretraining (i.e. during training the biased model).",
+        help="Batch size for the classifier during pretraining (i.e. during training the biased model).",
     )
     parser.add_argument(
         "--load_biased_classifier",
@@ -163,12 +164,17 @@ def parse_args():
     parser.add_argument(
         "--data_diet_examples_ranking",
         choices=[
-            "healthy_diet",
+            "healthy_El2N",
+            "healthy_forgetting_scores",
+            "healthy_GradN",
             "fairness_only_diet",
             "El2N",
             "forgetting_scores",
             "GradN",
             "random",
+            "healthy_random",
+            "super_healthy_random",
+            "unhealthy_random",
         ],
         default="random",
         help="Type of rankings we use to pick up the examples in data pruning. We choose form the EL2N score in https://arxiv.org/pdf/2107.07075.pdf, our score (which cares about both performance and fairness, thus called healthy diet), or random ranking",
@@ -181,12 +187,12 @@ def parse_args():
             "everywhere",
         ],
         default="everywhere",
-        help="The position of the examples that are flipped in data substitution. It can be only for the tokens in the begnning/end of the sentence, or jusy everywhere (the default)",
+        help="The position of the examples that are flipped in data substitution. It can be only for the tokens in the begnning/end of the sentence, or just everywhere (the default)",
     )
     parser.add_argument(
         "--data_substitution_ratio",
         type=float,
-        default=0.5,
+        default=0,
         help="The ratio of the dataset examples that are flipped in data substitution. It is set to 0.5 in the original CDS paper",
     )
     parser.add_argument(
@@ -205,7 +211,7 @@ def parse_args():
         "--data_diet_counterfactual_ratio",
         type=float,
         default=1,
-        help="The ratio of the counterfactual examples that we train on while using data diet. We cannot have both the data_diet_factual_ratio and data_diet_counterfactual_ratio be zero, because this means there is no training data.",
+        help="The ratio of the counterfactual examples that we train on while using data diet.",
     )
     # arguments for analysing the data
     parser.add_argument(
@@ -232,6 +238,8 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    assert (args.data_diet_counterfactual_ratio != 0 or args.data_diet_factual_ratio != 0)
+    # We cannot have both the data_diet_factual_ratio and data_diet_counterfactual_ratio be zero, because this means there is no training data.
     with zipfile.ZipFile("./bias_datasets.zip", "r") as zip_ref:
         zip_ref.extractall("./data")
 
@@ -243,14 +251,18 @@ if __name__ == "__main__":
         )
 
     model_dir = args.model_dir
-
+    output_dir = args.output_dir
+    
     if args.use_amulet:
         model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
+        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
 
     Path(model_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     if args.load_biased_classifier == False:
         # Train/Load the biased model using cross-entropy
+        # To-do: I should either remove the if or put something in the else
         biased_model = train_biased_classifier(
             args.dataset,
             args.CDA_examples_ranking,
@@ -262,7 +274,7 @@ if __name__ == "__main__":
             args.max_length,
             args.classifier_model,
             args.batch_size_pretraining,
-            args.model_dir,
+            model_dir,
             args.use_amulet,
             args.num_epochs_pretraining,
             args.learning_rate,
@@ -289,6 +301,7 @@ if __name__ == "__main__":
 
     # Load the dataset
     train_dataset, val_dataset, test_dataset = data_loader(
+        args.seed,
         args.dataset,
         args.CDA_examples_ranking,
         args.data_augmentation_ratio,
@@ -315,7 +328,12 @@ if __name__ == "__main__":
     model = model.to(device)
 
     # The number of epochs afterwhich we save the model.
-    checkpoint_steps = int(train_dataset.__len__() / args.batch_size_pretraining)
+    if args.compute_importance_scores:
+        # The number of epochs that we consider to compute our fairness score could be less than one to get capture the state of the model in the very early stages of trianing. We save the checkpoint to use them while computing the scores.
+        checkpoint_steps = int(train_dataset.__len__() / args.batch_size_pretraining * args.num_epochs_importance_score)
+    else:
+        # If we are not computing the scores, we can just save the checkpoint after each epoch
+        checkpoint_steps = int(train_dataset.__len__() / args.batch_size_pretraining)
 
     # We now train the model after applying data augmentation/substitution/blindness
     # to the dataset and train from scratch.
@@ -357,6 +375,7 @@ if __name__ == "__main__":
     )
 
     assess_performance_and_bias(
+        args.seed,
         model,
         args.dataset,
         args.CDA_examples_ranking,
@@ -367,8 +386,8 @@ if __name__ == "__main__":
         args.data_substitution_ratio,
         args.max_length,
         args.classifier_model,
-        args.output_dir,
-        args.model_dir,
+        output_dir,
+        model_dir,
         args.use_amulet,
         args.method,
         args.batch_size_pretraining,
@@ -377,6 +396,7 @@ if __name__ == "__main__":
     )
     if args.analyze_results:
         analyze_results(
+            args.seed,
             args.dataset,
             args.CDA_examples_ranking,
             args.data_augmentation_ratio,
@@ -389,8 +409,8 @@ if __name__ == "__main__":
             args.compute_importance_scores,
             args.num_epochs_pretraining,
             args.batch_size_pretraining,
-            args.output_dir,
-            args.model_dir,
+            output_dir,
+            model_dir,
             args.batch_size,
             args.analyze_attention,
             args.use_amulet,
