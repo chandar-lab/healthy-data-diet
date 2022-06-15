@@ -47,19 +47,13 @@ def compute_GradN(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-    if use_amulet:
-        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
-        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
     criterion = nn.CrossEntropyLoss()
 
     GradN_epoch = []
 
     for k in range(num_epochs_importance_score):
         # Check if the model already exists
+        # todo: The score is computed here over few epochs. I need to double check that this is how it should be. Since, I am using num_epochs_importance_score = 1, it doesn't matter for now
         model_checkpoint_path = (
             model_dir + "/checkpoint-" + str(checkpoint_steps * (k + 1))
         )
@@ -131,7 +125,7 @@ def compute_El2N_fairness(
         importance scores: the score that tells us how importance each examples is for fairness experiments.
     """
     # Save the model weights after each epoch
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
+    checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining * num_epochs_importance_score)
 
     if classifier_model in [
         "bert-base-cased",
@@ -145,72 +139,65 @@ def compute_El2N_fairness(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-    if use_amulet:
-        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
-        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     El2N_fairness_epoch = []
 
-    for k in range(num_epochs_importance_score):
+    #for k in range(num_epochs_importance_score):
         # Check if the model already exists
-        model_checkpoint_path = (
-            model_dir + "/checkpoint-" + str(checkpoint_steps * (k + 1))
+    model_checkpoint_path = (
+        model_dir + "/checkpoint-" + str(checkpoint_steps)
+    )
+    if os.path.isdir(model_checkpoint_path):
+        model_before_debiasing = huggingface_model.from_pretrained(
+            model_checkpoint_path, num_labels=len(set(train_dataset.labels))
+        ).to(device)
+
+        number_of_labels = len(set(train_dataset.labels))
+        El2N_fairness_before_debiasing = torch.ones([0, number_of_labels]).to(
+            device
         )
-        if os.path.isdir(model_checkpoint_path):
-            model_before_debiasing = huggingface_model.from_pretrained(
-                model_checkpoint_path, num_labels=len(set(train_dataset.labels))
+
+        # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
+        for i in range(int(np.ceil(len(train_dataset) / batch_size))):
+            with torch.no_grad():
+                prediction_original_gender = model_before_debiasing.forward(
+                    input_ids=torch.tensor(
+                        train_dataset.encodings["input_ids"][
+                            i * batch_size : (i + 1) * batch_size
+                        ]
+                    ).to(device),
+                    attention_mask=torch.tensor(
+                        train_dataset.encodings["attention_mask"][
+                            i * batch_size : (i + 1) * batch_size
+                        ]
+                    ).to(device),
+                )["logits"]
+                prediction_gender_swap = model_before_debiasing.forward(
+                    input_ids=torch.tensor(
+                        train_dataset.encodings_gender_swap["input_ids"][
+                            i * batch_size : (i + 1) * batch_size
+                        ]
+                    ).to(device),
+                    attention_mask=torch.tensor(
+                        train_dataset.encodings_gender_swap["attention_mask"][
+                            i * batch_size : (i + 1) * batch_size
+                        ]
+                    ).to(device),
+                )["logits"]
+
+                El2N_fairness = prediction_original_gender - prediction_gender_swap
+
+            El2N_fairness_batch = torch.cat(
+                [
+                    torch.unsqueeze(El2N_fairness[j], dim=0)
+                    for j in range(len(El2N_fairness))
+                ]
+            ).to(device)
+            El2N_fairness_before_debiasing = torch.cat(
+                (El2N_fairness_before_debiasing, El2N_fairness_batch), 0
             ).to(device)
 
-            number_of_labels = len(set(train_dataset.labels))
-            El2N_fairness_before_debiasing = torch.ones([0, number_of_labels]).to(
-                device
-            )
-
-            # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
-            for i in range(int(np.ceil(len(train_dataset) / batch_size))):
-                with torch.no_grad():
-                    prediction_original_gender = model_before_debiasing.forward(
-                        input_ids=torch.tensor(
-                            train_dataset.encodings["input_ids"][
-                                i * batch_size : (i + 1) * batch_size
-                            ]
-                        ).to(device),
-                        attention_mask=torch.tensor(
-                            train_dataset.encodings["attention_mask"][
-                                i * batch_size : (i + 1) * batch_size
-                            ]
-                        ).to(device),
-                    )["logits"]
-                    prediction_gender_swap = model_before_debiasing.forward(
-                        input_ids=torch.tensor(
-                            train_dataset.encodings_gender_swap["input_ids"][
-                                i * batch_size : (i + 1) * batch_size
-                            ]
-                        ).to(device),
-                        attention_mask=torch.tensor(
-                            train_dataset.encodings_gender_swap["attention_mask"][
-                                i * batch_size : (i + 1) * batch_size
-                            ]
-                        ).to(device),
-                    )["logits"]
-
-                    El2N_fairness = prediction_original_gender - prediction_gender_swap
-
-                El2N_fairness_batch = torch.cat(
-                    [
-                        torch.unsqueeze(El2N_fairness[j], dim=0)
-                        for j in range(len(El2N_fairness))
-                    ]
-                ).to(device)
-                El2N_fairness_before_debiasing = torch.cat(
-                    (El2N_fairness_before_debiasing, El2N_fairness_batch), 0
-                ).to(device)
-
-            El2N_fairness_epoch.append(El2N_fairness_before_debiasing)
+        El2N_fairness_epoch.append(El2N_fairness_before_debiasing)
 
     El2N_fairness_all = torch.cat(
         [
@@ -236,7 +223,7 @@ def compute_forgetting_score(
     num_epochs_pretraining,
 ):
     """
-    Compute the forgettig scores as in https://arxiv.org/pdf/1812.05159.pdf as the number of times each training examples is forgotten during trianing.
+    Compute the forgettig scores as in https://arxiv.org/pdf/1812.05159.pdf as the number of times each training examples is forgotten during training.
     Forgetting happens when the example is wrongly predicted after being correctly predicted.
     returns:
         forgetting_score: the number of times each training examples is forgotten during trianing, over multiple epochs.
@@ -256,13 +243,6 @@ def compute_forgetting_score(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-    if use_amulet:
-        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
-        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
     prediction_epoch = []
 
     for k in range(num_epochs_pretraining):
@@ -362,17 +342,11 @@ def compute_El2N_performance(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-    if use_amulet:
-        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-
-        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
-
-    Path(model_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
     El2N_performance_epoch = []
 
     for k in range(num_epochs_importance_score):
         # Check if the model already exists
+        # todo: The score is computed here over few epochs. I need to double check that this is how it should be. Since, I am using num_epochs_importance_score = 1, it doesn't matter for now
         model_checkpoint_path = (
             model_dir + "/checkpoint-" + str(checkpoint_steps * (k + 1))
         )
