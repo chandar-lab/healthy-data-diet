@@ -32,6 +32,7 @@ class Dataset(torch.utils.data.Dataset):
 
 
 def data_loader(
+    seed,
     dataset,
     CDA_examples_ranking,
     data_augmentation_ratio,
@@ -54,7 +55,7 @@ def data_loader(
     the gender flipped form.
     args:
         dataset: the dataset used
-        CDA_examples_ranking: the ranking of the CDa examples
+        CDA_examples_ranking: the ranking of the CDA examples
         data_augmentation_ratio: The ratio of data augmentation that we apply, given that the debiasing is using data augmentation
         data_diet_examples_ranking: Type of rankings we use to pick up the examples in data pruning.
         data_diet_factual_ratio: The ratio of the factual examples that we train on while using data diet.
@@ -63,50 +64,40 @@ def data_loader(
         max_length: The maximum length of the sentences that we classify (in terms of the number of tokens)
         classifier_model: the model name
         apply_data_augmentation: a flag to choose whether or not to apply data
-            augmentation, meaning that the number of examples doubles because we flip
-            the gender in each example and add it as a new example.
-            apply_data_diet: a flag to choose whether or not to apply data
-            diet, meaning that prune the examples.
+        augmentation, meaning that the number of examples doubles because we flip
+        the gender in each example and add it as a new example.
+        apply_data_diet: a flag to choose whether or not to apply data
+        diet to prune the examples.
         apply_data_substitution: a flag to choose whether or not to apply data
-            substitution, meaning that with a probability of 0.5 we flip the gender
-            in each example https://arxiv.org/abs/1909.00871.
+        substitution, meaning that with a probability of 0.5 we flip the gender
+        in each example https://arxiv.org/abs/1909.00871.
         apply_blindness: a flag to choose whether or not to apply data
-            blindness, meaning that we remove all the gender-related words, such as
-            names and pronouns.
+        blindness, meaning that we remove all the gender-related words, such as
+        names and pronouns.
         IPTTS: a flag that means that we want to also return the IPTTS dataset,
-            which is the dataset on which we compute the bias metrics. We can also
-            compute the AUC score on it.
+        which is the dataset on which we compute the bias metrics. We can also
+        compute the AUC score on it.
     returns:
         the function returns 3 objects, for the training, validation and test
         datasets. Each object contains the tokenized data and the corresponding
         labels.
     """
     data_train = pd.read_csv("./data/" + dataset + "_train_original_gender.csv")
+    data_train = data_train.sample(frac=1, random_state = seed).reset_index(drop=True)
     data_valid = pd.read_csv("./data/" + dataset + "_valid_original_gender.csv")
     data_test = pd.read_csv("./data/" + dataset + "_test_original_gender.csv")
 
     # The gender swap means that we flip the gender in each example in out dataset.
     # For example, the sentence "he is a doctor" becomes "she is a doctor".
     data_train_gender_swap = pd.read_csv("./data/" + dataset + "_train_gender_swap.csv")
+    data_train_gender_swap = data_train_gender_swap.sample(frac=1, random_state = seed).reset_index(drop=True)
     # The gender blind means that we remove the gender in each example in out dataset.
     # For example, the sentence "he is a doctor" becomes "is a doctor".
-    data_train_gender_blind = pd.read_csv(
-        "./data/" + dataset + "_train_gender_blind.csv"
-    )
 
     if dataset == "Wiki":
-        # "Balancing" means that we the number of examples that refer to both different genders is the same.
-        # This baseline is only iplemented for the Wikipedia dataset, following Dixon et al. paper https://storage.googleapis.com/pub-tools-public-publication-data/pdf/ab50a4205513d19233233dbdbb4d1035d7c8c6c2.pdf
+        # "Balancing" means that the number of examples that refer to different genders is the same.
+        # This baseline is only implemented for the Wikipedia dataset, following Dixon et al. paper https://storage.googleapis.com/pub-tools-public-publication-data/pdf/ab50a4205513d19233233dbdbb4d1035d7c8c6c2.pdf
         data_train_balanced = pd.read_csv("./data/" + dataset + "_train_balanced.csv")
-
-    # This is a boolean tensor that indentifies the examples that have undergone gender swapping
-    train_gender_swap = torch.tensor(
-        data_train[data_train.columns[0]]
-        != data_train_gender_swap[data_train_gender_swap.columns[0]]
-    )
-
-    if apply_blindness:
-        data_train = data_train_gender_blind
 
     if apply_data_balancing:
         data_train = data_train_balanced
@@ -126,14 +117,14 @@ def data_loader(
         if CDA_examples_ranking != "random":
 
             # This is the threshold for the most important k percentile in the dataset,
-            # such tat any exmaple that has a score higher than this threshold
+            # such that any exmaple that has a score higher than this threshold
             # is considered an important example. The idea is to get close to
-            # the performance of data augmentation, but with less exampels.
+            # the performance of data augmentation, but with less examples.
             if data_augmentation_ratio != 0:
                 # If we want to add 30% more examples, we add the top 30% examples after sorting them according to the importance score.
                 # We assume that the distribution of importance scores is uniform so that it becomes easier.
                 idx_important_examples = (
-                    data_train[CDA_examples_ranking]
+                    data_train[str(classifier_model) + " " + CDA_examples_ranking]
                     .sort_values(ascending=False)
                     .iloc[0 : int(len(data_train) * data_augmentation_ratio)]
                     .index
@@ -147,14 +138,6 @@ def data_loader(
 
                 data_train_gender_swap = pd.concat(
                     [data_train_gender_swap, data_train.iloc[idx_important_examples]],
-                    axis=0,
-                    ignore_index=True,
-                )
-                data_train_gender_blind = pd.concat(
-                    [
-                        data_train_gender_blind,
-                        data_train_gender_blind.iloc[idx_important_examples],
-                    ],
                     axis=0,
                     ignore_index=True,
                 )
@@ -182,16 +165,6 @@ def data_loader(
                 ignore_index=True,
             )
             # We also do data augmentation for the gender blind examples.
-            data_train_gender_blind = pd.concat(
-                [
-                    data_train_gender_blind,
-                    data_train_gender_blind.iloc[
-                        0 : int(data_augmentation_ratio * number_of_original_examples)
-                    ],
-                ],
-                axis=0,
-                ignore_index=True,
-            )
 
     if apply_data_diet:
         # In data diet, we prune the examples to achieve the desired performance and fairness with the least number of training examples.
@@ -207,19 +180,26 @@ def data_loader(
         idx_important_examples_performance = []
         idx_important_examples_fairness = []
         number_of_original_examples = len(data_train_gender_swap)
-        if data_diet_examples_ranking == "healthy_diet":
-            # If we are doing data pruning using our "healthy diet" method, we choose the examples that are important for the performance based on https://arxiv.org/pdf/2107.07075.pdf,
-            # while the examples important for fairness based on our EL2N for fariness metric. The "EL2N" data pruning will choose both based on the paper https://arxiv.org/pdf/2107.07075.pdf.
-            performance_ranking = "forgetting_scores"
+        if data_diet_examples_ranking in ["healthy_El2N", "healthy_forgetting_scores", "healthy_GradN"]:
+            # If we are doing data pruning using our "healthy" method, we choose the examples that are important for the performance based on existing scores,
+            # while the examples important for fairness based on our EL2N for fariness metric. 
+            
+            if data_diet_examples_ranking == "healthy_El2N":
+                performance_ranking = "El2N_performance"
+            elif data_diet_examples_ranking == "healthy_forgetting_scores":
+                performance_ranking = "forgetting_scores"
+            elif data_diet_examples_ranking == "healthy_GradN":
+                performance_ranking = "GradN"
+            
             fairness_ranking = "El2N_fairness"
             idx_important_examples_performance = (
-                data_train[performance_ranking]
+                data_train[str(classifier_model) + " " + performance_ranking]
                 .sort_values(ascending=False)
                 .iloc[0 : int(len(data_train) * data_diet_factual_ratio)]
                 .index
             )
             idx_important_examples_fairness = (
-                data_train[fairness_ranking]
+                data_train[str(classifier_model) + " " + fairness_ranking]
                 .sort_values(ascending=False)
                 .iloc[0 : int(len(data_train) * data_diet_counterfactual_ratio)]
                 .index
@@ -227,18 +207,18 @@ def data_loader(
 
         if data_diet_examples_ranking == "fairness_only_diet":
             # If we are doing data pruning using our "healthy diet" method, we choose the examples that are important for the performance based on https://arxiv.org/pdf/2107.07075.pdf,
-            # while the examples important for fairness based on our EL2N for fariness metric. The "EL2N" data pruning will choose both based on the paper https://arxiv.org/pdf/2107.07075.pdf.
+            # while the examples important for fairness based on our EL2N for fariness metric. 
             performance_ranking = "El2N_fairness"
             fairness_ranking = "El2N_fairness"
 
             idx_important_examples_performance = (
-                data_train[performance_ranking]
+                data_train[str(classifier_model) + " " + performance_ranking]
                 .sort_values(ascending=False)
                 .iloc[0 : int(len(data_train) * data_diet_factual_ratio)]
                 .index
             )
             idx_important_examples_fairness = (
-                data_train[fairness_ranking]
+                data_train[str(classifier_model) + " " + fairness_ranking]
                 .sort_values(ascending=False)
                 .iloc[0 : int(len(data_train) * data_diet_counterfactual_ratio)]
                 .index
@@ -248,7 +228,7 @@ def data_loader(
 
             performance_ranking = "El2N_performance"
             idx_important_examples_performance = (
-                data_train[performance_ranking]
+                data_train[str(classifier_model) + " " + performance_ranking]
                 .sort_values(ascending=False)
                 .iloc[0 : int(len(data_train) * data_diet_factual_ratio)]
                 .index
@@ -262,7 +242,7 @@ def data_loader(
 
             performance_ranking = "forgetting_scores"
             idx_important_examples_performance = (
-                data_train[performance_ranking]
+                data_train[str(classifier_model) + " " + performance_ranking]
                 .sort_values(ascending=False)
                 .iloc[0 : int(len(data_train) * data_diet_factual_ratio)]
                 .index
@@ -276,7 +256,7 @@ def data_loader(
 
             performance_ranking = "GradN"
             idx_important_examples_performance = (
-                data_train[performance_ranking]
+                data_train[str(classifier_model) + " " + performance_ranking]
                 .sort_values(ascending=False)
                 .iloc[0 : int(len(data_train) * data_diet_factual_ratio)]
                 .index
@@ -297,6 +277,58 @@ def data_loader(
                 for i in range(int(len(data_train) * data_diet_counterfactual_ratio))
             ]
 
+        elif data_diet_examples_ranking == "healthy_random":
+
+            fairness_ranking = "El2N_fairness"
+
+            idx_important_examples_performance += [
+                random.randrange(0, number_of_original_examples)
+                for i in range(int(len(data_train) * data_diet_factual_ratio))
+            ]
+
+            idx_important_examples_fairness = (
+                data_train[str(classifier_model) + " " + fairness_ranking]
+                .sort_values(ascending=False)
+                .iloc[0 : int(len(data_train) * data_diet_counterfactual_ratio)]
+                .index
+            )   
+            
+        elif data_diet_examples_ranking == "super_healthy_random":
+
+
+            fairness_ranking = "El2N_fairness"
+
+            idx_important_examples_fairness = (
+                data_train[str(classifier_model) + " " + fairness_ranking]
+                .sort_values(ascending=False)
+                .iloc[0 : int(len(data_train) * data_diet_counterfactual_ratio)]
+                .index
+            )    
+
+            idx_important_examples_performance = []
+            while len(idx_important_examples_performance) < int(len(data_train) * data_diet_factual_ratio):
+              sample = random.randrange(0, number_of_original_examples)
+              # We want to sample the factual examples such that their couterfactual couterparts are not in also selected
+              if sample not in idx_important_examples_fairness:
+                idx_important_examples_performance += [sample]
+     
+        elif data_diet_examples_ranking == "unhealthy_random":
+
+            idx_important_examples_fairness += [
+                random.randrange(0, number_of_original_examples)
+                for i in range(int(len(data_train) * data_diet_counterfactual_ratio))
+            ]
+
+            performance_ranking = "El2N_fairness"
+
+            idx_important_examples_performance = (
+                data_train[str(classifier_model) + " " + performance_ranking]
+                .sort_values(ascending=False)
+                .iloc[0 : int(len(data_train) * data_diet_factual_ratio)]
+                .index
+            )   
+ 
+                        
         data_train_important_performance = data_train.iloc[
             idx_important_examples_performance
         ]
@@ -309,6 +341,7 @@ def data_loader(
         data_train_gender_swap_important_fairness = data_train.iloc[
             idx_important_examples_fairness
         ]
+
 
         data_train = pd.concat(
             [data_train_important_performance, data_train_important_fairness],
@@ -371,13 +404,6 @@ def data_loader(
         X_train_gender_swap, padding=True, truncation=True, max_length=max_length
     )
 
-    X_train_gender_blind = list(
-        data_train_gender_blind[data_train_gender_blind.columns[0]]
-    )
-
-    X_train_gender_blind_tokenized = tokenizer(
-        X_train_gender_blind, padding=True, truncation=True, max_length=max_length
-    )
 
     X_train_tokenized = tokenizer(
         X_train, padding=True, truncation=True, max_length=max_length
@@ -392,8 +418,6 @@ def data_loader(
     train_dataset = Dataset(
         encodings=X_train_tokenized,
         encodings_gender_swap=X_train_gender_swap_tokenized,
-        encodings_gender_blind=X_train_gender_blind_tokenized,
-        gender_swap=train_gender_swap,
         labels=y_train,
     )
     val_dataset = Dataset(
