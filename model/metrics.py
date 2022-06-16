@@ -708,6 +708,8 @@ def compute_metrics(
             logs["Demographic parity after bias reduction"] = demographic_parity[
                 "demographic parity after bias reduction"
             ]
+
+
             if use_wandb:
                 wandb.log(logs)
 
