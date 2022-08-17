@@ -3,7 +3,6 @@ from model.data_loader import data_loader
 from sklearn.metrics import roc_auc_score
 from pathlib import Path
 import torch
-import os
 import json
 import numpy as np
 import torch.nn.functional as F
@@ -30,8 +29,8 @@ def assess_performance_and_bias(
     model_dir,
     use_amulet,
     method,
-    batch_size_pretraining,
-    batch_size,
+    batch_size_biased_model,
+    batch_size_debiased_model,
     use_wandb,
 ):
     """
@@ -48,6 +47,7 @@ def assess_performance_and_bias(
     7) Demographic parity
     8) Equality of odds
     args:
+        seed: the seed_used
         model_after_bias_reduction: the model after updating its weights due to bias reduction
         dataset: the dataset used
         CDA_examples_ranking: the ranking of the CDA examples
@@ -62,8 +62,8 @@ def assess_performance_and_bias(
         model_dir: the Directory to the model
         use_amulet: whether or not to run the code on Amulet, which is the cluster used at Microsoft research
         method: the debiasing method used
-        batch_size_pretraining: the batch size for the pretraining (training the biased model)
-        batch_size: the batch size for the training of the debiased model
+        batch_size_biased_model: the batch size for the pretraining (training the biased model)
+        batch_size_debiased_model: the batch size for the training of the debiased model
         use_wandb: whether or not to use wandb
 
         the function doesnt return anything, since all the metrics are saved in json files.
@@ -92,8 +92,6 @@ def assess_performance_and_bias(
 
     num_labels = len(set(train_dataset.labels))
 
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
-
     if classifier_model in [
         "bert-base-cased",
         "bert-large-cased",
@@ -106,7 +104,7 @@ def assess_performance_and_bias(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-    model_checkpoint_path = model_dir + "/checkpoint-" + str(checkpoint_steps)
+    model_checkpoint_path = "./saved_models/cached_models/" + classifier_model
     model_before_bias_reduction = huggingface_model.from_pretrained(
         model_checkpoint_path, num_labels=len(set(val_dataset.labels))
     ).to(device)
@@ -114,7 +112,7 @@ def assess_performance_and_bias(
     # Load the model that has the best performance on the validation data
     model_before_bias_reduction.load_state_dict(
         torch.load(
-            model_dir + classifier_model + "_" + dataset + "_biased_best.pt",
+            model_dir + classifier_model + "_" + dataset + "_" + method + "_" + data_diet_examples_ranking + "_" + str(data_augmentation_ratio) + "_" + str(data_diet_factual_ratio) + "_" + str(data_diet_counterfactual_ratio) + "_biased_best.pt",
             map_location=device,
         )
     )
@@ -140,7 +138,7 @@ def assess_performance_and_bias(
             dataset,
             model_before_bias_reduction,
             model_after_bias_reduction,
-            batch_size,
+            batch_size_debiased_model,
             num_labels,
             output_dir,
             use_amulet,
@@ -181,7 +179,7 @@ def compute_metrics(
     dataset_name,
     model_before_bias_reduction,
     model_after_bias_reduction,
-    batch_size,
+    batch_size_debiased_model,
     num_labels,
     output_dir,
     use_amulet,
@@ -198,7 +196,7 @@ def compute_metrics(
         dataset_name: the name of the dataset used
         model_before_bias_reduction: the model before updating its weights for bias reduction
         model_after_bias_reduction: the model after updating its weights for bias reduction
-        batch_size: the size of the batch used
+        batch_size_debiased_model: the size of the batch used
         num_labels: the numnber of labels in the dataset
         output_dir: the directory to the output
         use_amulet: whether or not to run the code on Amulet, which is the cluster used at Microsoft research
@@ -228,17 +226,17 @@ def compute_metrics(
         y_pred_after_bias_reduction = torch.ones([0, num_labels]).to(device)
         y_pred_before_bias_reduction = torch.ones([0, num_labels]).to(device)
 
-        for i in range(int(np.ceil(len(split_dataset) / batch_size))):
+        for i in range(int(np.ceil(len(split_dataset) / batch_size_debiased_model))):
 
             results_after_bias_reduction = model_after_bias_reduction.forward(
                 input_ids=torch.tensor(
                     split_dataset.encodings["input_ids"][
-                        i * batch_size : (i + 1) * batch_size
+                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                     ]
                 ).to(device),
                 attention_mask=torch.tensor(
                     split_dataset.encodings["attention_mask"][
-                        i * batch_size : (i + 1) * batch_size
+                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                     ]
                 ).to(device),
             )[0]
@@ -246,12 +244,12 @@ def compute_metrics(
             results_before_bias_reduction = model_before_bias_reduction.forward(
                 input_ids=torch.tensor(
                     split_dataset.encodings["input_ids"][
-                        i * batch_size : (i + 1) * batch_size
+                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                     ]
                 ).to(device),
                 attention_mask=torch.tensor(
                     split_dataset.encodings["attention_mask"][
-                        i * batch_size : (i + 1) * batch_size
+                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                     ]
                 ).to(device),
             )[0]
