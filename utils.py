@@ -7,9 +7,6 @@ import torch
 import numpy as np
 import os
 
-# from gender_bender import gender_bend
-from pathlib import Path
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
 
@@ -71,13 +68,13 @@ def find_biased_examples(dataset_name, data):
     return prediction_logistic_reg
 
 
-def average_attention_map_all_heads(dataset, model, batch_size):
+def average_attention_map_all_heads(dataset, model, batch_size_debiased_model):
     """
     This function adds the attention weight maps (per example) in all the heads in the model
     args:
         dataset: the dataset for which the attention maps are computed
         model: the model used to get the attention map
-        batch_size: the size of our batch
+        batch_size_debiased_model: the size of our batch
     returns:
         the function returns a pytorch tensor that has the summation of the attention
         map over all the heads in the model for each example
@@ -87,17 +84,17 @@ def average_attention_map_all_heads(dataset, model, batch_size):
     all_heads_attention_per_example = torch.ones(
         [0, maximum_tokens, maximum_tokens]
     ).to(device)
-    for i in range(int(np.ceil(len(dataset) / batch_size))):
+    for i in range(int(np.ceil(len(dataset) / batch_size_debiased_model))):
         with torch.no_grad():
             attention = model.forward(
                 input_ids=torch.tensor(
                     dataset.encodings["input_ids"][
-                        i * batch_size : (i + 1) * batch_size
+                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                     ]
                 ).to(device),
                 attention_mask=torch.tensor(
                     dataset.encodings["attention_mask"][
-                        i * batch_size : (i + 1) * batch_size
+                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                     ]
                 ).to(device),
             )["attentions"]
@@ -117,13 +114,13 @@ def average_attention_map_all_heads(dataset, model, batch_size):
 
 
 def compute_confidence_and_variability(
-    batch_size_pretraining,
+    batch_size_biased_model,
     classifier_model,
     output_dir,
     model_dir,
     use_amulet,
-    batch_size,
-    num_epochs_pretraining,
+    batch_size_debiased_model,
+    num_epochs_biased_model,
     num_epochs_confidence_variability,
     train_dataset,
     val_dataset,
@@ -141,7 +138,7 @@ def compute_confidence_and_variability(
         variability: the standard deviation of the predictions that the model gives to the ground truth label, over multiple epochs.
     """
     # Save the model weights after each epoch
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
+    checkpoint_steps = int(train_dataset.__len__() / batch_size_biased_model)
 
     if classifier_model in [
         "bert-base-cased",
@@ -167,24 +164,21 @@ def compute_confidence_and_variability(
                 model_checkpoint_path, num_labels=len(set(val_dataset.labels))
             ).to(device)
 
-            ## Define test trainer
-            # test_trainer_before_debiasing = Trainer(model_before_debiasing)
-
             number_of_labels = len(set(val_dataset.labels))
             prediction_before_debiasing = torch.ones([0, number_of_labels]).to(device)
 
             # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
-            for i in range(int(np.ceil(len(val_dataset) / batch_size))):
+            for i in range(int(np.ceil(len(val_dataset) / batch_size_debiased_model))):
                 with torch.no_grad():
                     prediction = model_before_debiasing.forward(
                         input_ids=torch.tensor(
                             val_dataset.encodings["input_ids"][
-                                i * batch_size : (i + 1) * batch_size
+                                i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                             ]
                         ).to(device),
                         attention_mask=torch.tensor(
                             val_dataset.encodings["attention_mask"][
-                                i * batch_size : (i + 1) * batch_size
+                                i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
                             ]
                         ).to(device),
                     )["logits"]
@@ -234,7 +228,7 @@ def compute_confidence_and_variability(
 
 
 def log_topk_attention_tokens(
-    batch_size,
+    batch_size_debiased_model,
     num_tokens_logged,
     data,
     model_before_debiasing,
@@ -254,7 +248,7 @@ def log_topk_attention_tokens(
     ids = dataset[:]["input_ids"].to(device)
 
     all_heads_attention_before_debiasing = average_attention_map_all_heads(
-        dataset, model_before_debiasing, batch_size
+        dataset, model_before_debiasing, batch_size_debiased_model
     )
 
     # ===================================================#
@@ -266,7 +260,7 @@ def log_topk_attention_tokens(
     gender_tokens_debiased = []
 
     all_heads_attention_after_debiasing = average_attention_map_all_heads(
-        dataset, model_after_debiasing, batch_size
+        dataset, model_after_debiasing, batch_size_debiased_model
     )
 
     # We look for 3 things:
@@ -414,8 +408,5 @@ def log_topk_attention_tokens(
     data[
         "Average attention weights for non-gender tokens debiased model"
     ] = attention_weights_nongender_tokens_debiased.cpu().numpy()
-
-    # data["Presence of gender tokens in top k tokens biased model"] = detect_gender_words(top_attention_tokens_biased)
-    # data["Presence of gender tokens in top k tokens debiased model"] = detect_gender_words(top_attention_tokens_debiased)
 
     return data
