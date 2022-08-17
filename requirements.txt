@@ -1,6 +1,10 @@
-pytorch-pretrained-bert==0.6.2
-torch==1.9.0+cu102
-transformers==4.3.2
-trl==0.0.3
-wandb==0.10.32
-bertviz
+pytorch-pretrained-bert
+transformers
+wandb
+torch
+sklearn
+pandas
+numpy
+matplotlib
+seaborn
+scipy
