@@ -7,6 +7,8 @@ import torch
 import numpy as np
 import os
 
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
 
@@ -74,9 +76,9 @@ def average_attention_map_all_heads(dataset, model, batch_size_debiased_model):
     args:
         dataset: the dataset for which the attention maps are computed
         model: the model used to get the attention map
-        batch_size_debiased_model: the size of our batch
+        batch_size_debiased_model: the size of our batch during training the debiasing model
     returns:
-        the function returns a pytorch tensor that has the summation of the attention
+        the function returns a Pytorch tensor that has the average of the attention
         map over all the heads in the model for each example
     """
     all_heads_attention_batch = []
@@ -129,7 +131,7 @@ def compute_confidence_and_variability(
     Compute the confidence and variability in the model before debiasing as in https://arxiv.org/pdf/2009.10795.pdf as follows:
     1) The model is trained for multple epochs, and after each epoch it is used to give predictions for a specific dataset (it could be training or validation).
     2) The examples in the dataset are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous" based on the mean and standard deviation in the predictions of the ground truth labels.
-    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, while low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
+    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, with low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
     arguments that need explanation:
         num_epochs_confidence_variability: the number of epochs that we consider while computing confidence and variability
     returns:
