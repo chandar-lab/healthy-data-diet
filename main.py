@@ -32,26 +32,28 @@ def parse_args():
             "data_diet",
         ],
         default="data_substitution",
-        help="Choosing between our work and some of the baseline methods. CLP stands for Counterfactual Logit Pairing",
+        help="Choosing between our work and some of the baseline methods.",
     )
-    parser.add_argument("--batch_size_debiased_model", type=int, default=64, help="Samples per batch")
+    parser.add_argument(
+        "--batch_size_debiased_model", type=int, default=64, help="Samples per batch"
+    )
     parser.add_argument(
         "--num_epochs_debiased_model",
         type=int,
-        default=16,
-        help="Number of training epochs",
+        default=1,
+        help="Number of training epochs for the training of the debiased model",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=None,
-        help="The seed that we are running. We normally run every experiment for 5 seeds.",
+        help="The seed that we are running the experiment for. We run every experiment for 5 seeds.",
     )
     parser.add_argument(
         "--learning_rate",
         type=float,
         default=1e-6,
-        help="learning rate for the Bert classifier",
+        help="learning rate for the optimizer",
     )
     parser.add_argument(
         "--classifier_model",
@@ -84,7 +86,7 @@ def parse_args():
         "--num_epochs_biased_model",
         type=int,
         default=1,
-        help="Number of pretraining epochs for the classifier, which precedes the debiasing (i.e. the number of epochs for the biased model training).",
+        help="Number of epochs for the training of the biased classifier, which precedes the debiasing.",
     )
     parser.add_argument(
         "--num_epochs_confidence_variability",
@@ -96,19 +98,19 @@ def parse_args():
         "--num_epochs_importance_score",
         type=float,
         default=1,
-        help="Number of training epochs that we consider for computing the El2N and GraNd importance scores. Following the paper, we set of to 10% of the number of epochs needed for convergence",
+        help="Number of training epochs that we consider for computing the EL2N and GraNd importance scores. Following the paper, we set it to 10% of the number of epochs needed for convergence",
     )
     parser.add_argument(
         "--batch_size_biased_model",
         type=int,
-        default=32,
-        help="Batch size for the classifier during pretraining (i.e. during training the biased model).",
+        default=64,
+        help="Batch size for the training of the biased model.",
     )
     parser.add_argument(
         "--compute_importance_scores",
         type=bool,
         default=False,
-        help="Whether or not to compute EL2N importance scores from https://arxiv.org/pdf/2107.07075.pdf",
+        help="Whether or not to compute importance scores",
     )
     parser.add_argument(
         "--max_length",
@@ -119,7 +121,7 @@ def parse_args():
     parser.add_argument(
         "--model_checkpoint_path",
         default="./saved_models/checkpoint-",
-        help="Path to the saved Bert classifier checkpoint",
+        help="Path to the saved classifier checkpoint",
     )
     parser.add_argument(
         "--output_dir",
@@ -148,22 +150,22 @@ def parse_args():
         choices=[
             "GE",
             "EL2N",
-            "forgetting_scores",
+            "forget_score",
             "GraNd",
             "random",
         ],
         default="random",
-        help="Type of rankings we use to pick up the examples in CDA. We choose form the EL2N score for performance/GraNd in https://arxiv.org/pdf/2107.07075.pdf, our EL2N score for fairness which we propose, random ranking, or forgetting scores https://arxiv.org/pdf/1812.05159.pdf",
+        help="Type of rankings we use to pick up the examples in data augmentation. We choose form the EL2N/GraNd in https://arxiv.org/pdf/2107.07075.pdf, our GE score for fairness which we propose, random ranking, or forgetting scores https://arxiv.org/pdf/1812.05159.pdf",
     )
     parser.add_argument(
         "--data_diet_examples_ranking",
         choices=[
-            "healthy_El2N",
-            "healthy_forgetting_scores",
+            "healthy_EL2N",
+            "healthy_forget_score",
             "healthy_GraNd",
             "vanilla_GE",
-            "El2N",
-            "forgetting_scores",
+            "EL2N",
+            "forget_score",
             "GraNd",
             "healthy_GE",
             "unhealthy_GE",
@@ -171,9 +173,11 @@ def parse_args():
             "healthy_random",
             "super_healthy_random",
             "unhealthy_random",
+            "healthy_data_diet",
+            "unhealthy_data_diet",
         ],
         default="random",
-        help="Type of rankings we use to pick up the examples in data pruning. We choose form the EL2N score in https://arxiv.org/pdf/2107.07075.pdf, our score (which cares about both performance and fairness, thus called healthy diet), or random ranking",
+        help="Type of rankings we use to pick up the examples in data pruning.",
     )
     parser.add_argument(
         "--data_substitution_position",
@@ -213,8 +217,8 @@ def parse_args():
     parser.add_argument(
         "--analyze_results",
         type=bool,
-        default=False,
-        help="Whether or not to analyze the results by finding the examples that flipped from wrongly predicted to correctly predicted, and computing the top tokens that the model attends to",
+        default=True,
+        help="Whether or not to analyze the results by finding the examples that flipped from wrongly predicted to correctly predicted, computing the top tokens that the model attends to, and the test and validation performances",
     )
     parser.add_argument(
         "--analyze_attention",
@@ -234,17 +238,16 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    assert (args.data_diet_counterfactual_ratio != 0 or args.data_diet_factual_ratio != 0)
+    assert args.data_diet_counterfactual_ratio != 0 or args.data_diet_factual_ratio != 0
     # We cannot have both the data_diet_factual_ratio and data_diet_counterfactual_ratio be zero, because this means there is no training data.
-    with zipfile.ZipFile("./bias_datasets_correct.zip", "r") as zip_ref:
+    with zipfile.ZipFile("./bias_dataset_arxiv.zip", "r") as zip_ref:
         zip_ref.extractall("./data")
-
 
     if args.use_wandb:
         wandb_mode = "online"
     else:
         wandb_mode = "offline"
-        
+
     if args.seed != None:
         my_seed = args.seed
     else:
@@ -252,25 +255,49 @@ if __name__ == "__main__":
 
     wandb.init(
         name=str(args.dataset),
-        project="Analyzing data-based gender bias mitigation",
+        project="Deep learning on healthy data diet",
         config=args,
-        mode= wandb_mode,
+        mode=wandb_mode,
     )
 
     model_name = args.classifier_model
     model_dir = args.model_dir + "/" + model_name + "/"
     output_dir = args.output_dir
-    
+
     if args.use_amulet:
         model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
         output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
-        
-    if args.method == "data_diet":
-        method_details = args.method + "_" + args.data_diet_examples_ranking + "_" + str(args.data_diet_factual_ratio) + "_" + str(args.data_diet_counterfactual_ratio)
-    else:
-        method_details = args.method 
-    output_dir = "./results/" + method_details + "_" + args.classifier_model + "_" + args.dataset + "_Seed_" + str(my_seed) + "_CDS_ratio_" + str(args.data_substitution_ratio) + "_CDA_ratio_" + str(args.data_augmentation_ratio) + "_" + args.CDA_examples_ranking + "/" + output_dir
 
+    if args.method == "data_diet":
+        method_details = (
+            args.method
+            + "_"
+            + args.data_diet_examples_ranking
+            + "_"
+            + str(args.data_diet_factual_ratio)
+            + "_"
+            + str(args.data_diet_counterfactual_ratio)
+        )
+    else:
+        method_details = args.method
+    output_dir = (
+        "./results/arxiv_2/"
+        + method_details
+        + "_"
+        + args.classifier_model
+        + "_"
+        + args.dataset
+        + "_Seed_"
+        + str(my_seed)
+        + "_CDS_ratio_"
+        + str(args.data_substitution_ratio)
+        + "_CDA_ratio_"
+        + str(args.data_augmentation_ratio)
+        + "_"
+        + args.CDA_examples_ranking
+        + "/"
+        + output_dir
+    )
 
     Path(model_dir).mkdir(parents=True, exist_ok=True)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -297,7 +324,22 @@ if __name__ == "__main__":
     # save the best biased model
     torch.save(
         biased_model.state_dict(),
-        model_dir + "/" + args.classifier_model + "_" + args.dataset + "_" + args.method + "_" + args.data_diet_examples_ranking + "_" + str(args.data_augmentation_ratio) + "_" + str(args.data_diet_factual_ratio) + "_" + str(args.data_diet_counterfactual_ratio) + "_biased_best.pt",
+        model_dir
+        + "/"
+        + args.classifier_model
+        + "_"
+        + args.dataset
+        + "_"
+        + args.method
+        + "_"
+        + args.data_diet_examples_ranking
+        + "_"
+        + str(args.data_augmentation_ratio)
+        + "_"
+        + str(args.data_diet_factual_ratio)
+        + "_"
+        + str(args.data_diet_counterfactual_ratio)
+        + "_biased_best.pt",
     )
 
     if args.classifier_model in [
@@ -339,16 +381,19 @@ if __name__ == "__main__":
 
     model = model.to(device)
 
-    # The number of epochs afterwhich we save the model.
+    # The number of epochs after which we save the model.
     if args.compute_importance_scores:
         # The number of epochs that we consider to compute our fairness score could be less than one to get capture the state of the model in the very early stages of trianing. We save the checkpoint to use them while computing the scores.
-        checkpoint_steps = int(train_dataset.__len__() / args.batch_size_biased_model * args.num_epochs_importance_score)
+        checkpoint_steps = int(
+            train_dataset.__len__()
+            / args.batch_size_biased_model
+            * args.num_epochs_importance_score
+        )
     else:
         # If we are not computing the scores, we can just save the checkpoint after each epoch
         checkpoint_steps = int(train_dataset.__len__() / args.batch_size_biased_model)
 
-    # We now train the model after applying data augmentation/substitution/blindness
-    # to the dataset and train from scratch.
+    # We now train the debiased model
 
     # Define Trainer parameters
     classifier_args = TrainingArguments(
@@ -382,11 +427,16 @@ if __name__ == "__main__":
         + args.classifier_model
         + "_"
         + args.dataset
-        + "_" + args.method
-        + "_" + args.data_diet_examples_ranking
-        + "_" + str(args.data_augmentation_ratio)
-        + "_" + str(args.data_diet_factual_ratio)
-        + "_" + str(args.data_diet_counterfactual_ratio)
+        + "_"
+        + args.method
+        + "_"
+        + args.data_diet_examples_ranking
+        + "_"
+        + str(args.data_augmentation_ratio)
+        + "_"
+        + str(args.data_diet_factual_ratio)
+        + "_"
+        + str(args.data_diet_counterfactual_ratio)
         + "_debiased_best.pt",
     )
 
