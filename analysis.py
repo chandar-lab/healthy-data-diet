@@ -16,7 +16,6 @@ from importance_scores import (
 )
 
 
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
 
@@ -93,8 +92,8 @@ def analyze_results(
     if compute_importance_scores:
         data_train = pd.read_csv("./data/" + dataset + "_train_original_gender.csv")
         if CDA_examples_ranking == "GE":
-            # It is computed on the training dataset, as in https://arxiv.org/pdf/2107.07075.pdf
-            GE_mean = compute_GE(
+            # This computes our GE score
+            GE_mean, stereotype_all = compute_GE(
                 batch_size_biased_model,
                 classifier_model,
                 output_dir,
@@ -109,7 +108,10 @@ def analyze_results(
                 GE_mean.cpu().detach().numpy()
             )
 
+            data_train[str(classifier_model) + " stereotype"] = stereotype_all
+
         elif CDA_examples_ranking == "EL2N":
+            # It is computed on the training dataset, as in https://arxiv.org/pdf/2107.07075.pdf
             EL2N_mean = compute_EL2N(
                 batch_size_biased_model,
                 classifier_model,
@@ -125,8 +127,9 @@ def analyze_results(
                 EL2N_mean.cpu().detach().numpy()
             )
 
-        elif CDA_examples_ranking == "forgetting_scores":
-            forgetting_scores = compute_forgetting_score(
+        elif CDA_examples_ranking == "forget_score":
+            # Based on https://arxiv.org/pdf/1812.05159.pdf
+            forget_score = compute_forgetting_score(
                 batch_size_biased_model,
                 classifier_model,
                 output_dir,
@@ -138,10 +141,11 @@ def analyze_results(
             )
 
             data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
-                forgetting_scores.cpu().detach().numpy()
+                forget_score.cpu().detach().numpy()
             )
 
         elif CDA_examples_ranking == "GraNd":
+            # See https://arxiv.org/pdf/2107.07075.pdf
             GraNd = compute_GraNd(
                 batch_size_biased_model,
                 classifier_model,
@@ -152,9 +156,12 @@ def analyze_results(
                 train_dataset,
             )
 
-            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(GraNd.cpu().detach().numpy())
+            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
+                GraNd.cpu().detach().numpy()
+            )
 
     for split in ["valid", "test"]:
+        # Compute the validation and test performance
         data = pd.read_csv("./data/" + dataset + "_" + split + "_original_gender.csv")
 
         if split == "valid":
@@ -219,7 +226,21 @@ def analyze_results(
         # Load the model that has the de-biased model
         model_before_debiasing.load_state_dict(
             torch.load(
-                model_dir + classifier_model + "_" + dataset + "_" + method + "_" + data_diet_examples_ranking + "_" + str(data_augmentation_ratio) + "_" + str(data_diet_factual_ratio) + "_" + str(data_diet_counterfactual_ratio) + "_biased_best.pt",
+                model_dir
+                + classifier_model
+                + "_"
+                + dataset
+                + "_"
+                + method
+                + "_"
+                + data_diet_examples_ranking
+                + "_"
+                + str(data_augmentation_ratio)
+                + "_"
+                + str(data_diet_factual_ratio)
+                + "_"
+                + str(data_diet_counterfactual_ratio)
+                + "_biased_best.pt",
                 map_location=device,
             )
         )
@@ -231,12 +252,16 @@ def analyze_results(
                 prediction = model_before_debiasing.forward(
                     input_ids=torch.tensor(
                         dataset_split.encodings["input_ids"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                     attention_mask=torch.tensor(
                         dataset_split.encodings["attention_mask"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                 )["logits"]
@@ -272,11 +297,16 @@ def analyze_results(
                 + classifier_model
                 + "_"
                 + dataset
-                + "_" + method
-                + "_" + data_diet_examples_ranking
-                + "_" + str(data_augmentation_ratio)
-                + "_" + str(data_diet_factual_ratio)
-                + "_" + str(data_diet_counterfactual_ratio)                
+                + "_"
+                + method
+                + "_"
+                + data_diet_examples_ranking
+                + "_"
+                + str(data_augmentation_ratio)
+                + "_"
+                + str(data_diet_factual_ratio)
+                + "_"
+                + str(data_diet_counterfactual_ratio)
                 + "_debiased_best.pt",
                 map_location=device,
             )
@@ -288,12 +318,16 @@ def analyze_results(
                 prediction = model_after_debiasing.forward(
                     input_ids=torch.tensor(
                         dataset_split.encodings["input_ids"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                     attention_mask=torch.tensor(
                         dataset_split.encodings["attention_mask"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                 )["logits"]
@@ -353,7 +387,6 @@ def analyze_results(
             lambda x: len(re.findall(r"\w+", x))
         )
 
-            
         file_directory = output_dir + "analysis/"
         Path(file_directory).mkdir(parents=True, exist_ok=True)
         data.to_csv(
