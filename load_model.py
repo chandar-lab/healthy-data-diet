@@ -16,17 +16,10 @@ if __name__ == "__main__":
     args = parse_args()
 
     if args.use_wandb:
-        wandb.init(
-            name=str(args.dataset),
-            project="Analyzing data-based gender bias mitigation",
-            config=args,
-        )
-
-    if args.use_wandb:
         wandb_mode = "online"
     else:
         wandb_mode = "offline"
-        
+
     if args.seed != None:
         my_seed = args.seed
     else:
@@ -36,7 +29,7 @@ if __name__ == "__main__":
         name=str(args.dataset),
         project="Analyzing data-based gender bias mitigation",
         config=args,
-        mode= wandb_mode,
+        mode=wandb_mode,
     )
 
     train_dataset, val_dataset, test_dataset = data_loader(
@@ -74,7 +67,7 @@ if __name__ == "__main__":
 
     model_dir = args.model_dir + "/" + model_name + "/"
     output_dir = args.output_dir
-    
+
     if args.use_amulet:
         model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
         output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
@@ -82,18 +75,22 @@ if __name__ == "__main__":
     Path(model_dir).mkdir(parents=True, exist_ok=True)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
- 
     model.load_state_dict(
         torch.load(
             model_dir
             + args.classifier_model
             + "_"
             + args.dataset
-            + "_" + args.method
-            + "_" + args.data_diet_examples_ranking
-            + "_" + str(args.data_augmentation_ratio)
-            + "_" + str(args.data_diet_factual_ratio)
-            + "_" + str(args.data_diet_counterfactual_ratio)
+            + "_"
+            + args.method
+            + "_"
+            + args.data_diet_examples_ranking
+            + "_"
+            + str(args.data_augmentation_ratio)
+            + "_"
+            + str(args.data_diet_factual_ratio)
+            + "_"
+            + str(args.data_diet_counterfactual_ratio)
             + "_debiased_best.pt",
             map_location=device,
         )
