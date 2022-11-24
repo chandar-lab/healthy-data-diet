@@ -20,7 +20,7 @@ def compute_GraNd(
     train_dataset,
 ):
     """
-    Compute the l2 norm of the gradient of the loss function as in https://arxiv.org/pdf/2107.07075.pdf.
+    Compute the mean of l2 norm of the gradient of the loss function w.r.t the weights for each input example as in https://arxiv.org/pdf/2107.07075.pdf.
     The original paper suggested computing the scores in the very early stages of training, which was done on the first 20 epochs,
     given that their task needs 200 epochs for convergence. Since our tasks require 10-15 epochs for convergence, we compute the importance scores
     after 1 epoch.
@@ -29,7 +29,9 @@ def compute_GraNd(
     returns:
         importance scores: l2-norm of the gradient of the loss function w.r.t the weights for each input example.
     """
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_biased_model * num_epochs_importance_score)
+    checkpoint_steps = int(
+        train_dataset.__len__() / batch_size_biased_model * num_epochs_importance_score
+    )
 
     if classifier_model in [
         "bert-base-cased",
@@ -43,14 +45,11 @@ def compute_GraNd(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-
     criterion = nn.CrossEntropyLoss()
 
     GraNd_epoch = []
 
-    model_checkpoint_path = (
-        model_dir + "/checkpoint-" + str(checkpoint_steps)
-    )
+    model_checkpoint_path = model_dir + "/checkpoint-" + str(checkpoint_steps)
     if os.path.isdir(model_checkpoint_path):
         model_before_debiasing = huggingface_model.from_pretrained(
             model_checkpoint_path, num_labels=len(set(train_dataset.labels))
@@ -119,7 +118,9 @@ def compute_GE(
         importance scores: the score that tells us how importance each examples is for fairness experiments.
     """
     # Save the model weights after each epoch
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_biased_model * num_epochs_importance_score)
+    checkpoint_steps = int(
+        train_dataset.__len__() / batch_size_biased_model * num_epochs_importance_score
+    )
 
     if classifier_model in [
         "bert-base-cased",
@@ -133,75 +134,115 @@ def compute_GE(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-
     GE_epoch = []
+    stereotype_all = []
 
-    model_checkpoint_path = (
-        model_dir + "/checkpoint-" + str(checkpoint_steps)
-    )
+    model_checkpoint_path = model_dir + "/checkpoint-" + str(checkpoint_steps)
     if os.path.isdir(model_checkpoint_path):
         model_before_debiasing = huggingface_model.from_pretrained(
             model_checkpoint_path, num_labels=len(set(train_dataset.labels))
         ).to(device)
 
         number_of_labels = len(set(train_dataset.labels))
-        GE_before_debiasing = torch.ones([0, number_of_labels]).to(
-            device
-        )
+        GE_before_debiasing = torch.ones([0, number_of_labels]).to(device)
+        stereotype_all = []
 
         for i in range(int(np.ceil(len(train_dataset) / batch_size_debiased_model))):
             with torch.no_grad():
                 prediction_original_gender = model_before_debiasing.forward(
                     input_ids=torch.tensor(
                         train_dataset.encodings["input_ids"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                     attention_mask=torch.tensor(
                         train_dataset.encodings["attention_mask"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                 )["logits"]
                 prediction_gender_swap = model_before_debiasing.forward(
                     input_ids=torch.tensor(
                         train_dataset.encodings_gender_swap["input_ids"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                     attention_mask=torch.tensor(
                         train_dataset.encodings_gender_swap["attention_mask"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                 )["logits"]
 
                 GE = prediction_original_gender - prediction_gender_swap
 
+                error_original_gender = softmax(prediction_original_gender).to(
+                    device
+                ) - torch.nn.functional.one_hot(
+                    torch.tensor(
+                        train_dataset.labels[
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
+                        ]
+                    ),
+                    num_classes=len(set(train_dataset.labels)),
+                ).to(
+                    device
+                )
+
+                error_gender_swap = softmax(prediction_gender_swap).to(
+                    device
+                ) - torch.nn.functional.one_hot(
+                    torch.tensor(
+                        train_dataset.labels[
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
+                        ]
+                    ),
+                    num_classes=len(set(train_dataset.labels)),
+                ).to(
+                    device
+                )
+
+                stereotype = (
+                    torch.sign(
+                        torch.norm(error_original_gender, dim=1, p=2)
+                        - torch.norm(error_gender_swap, dim=1, p=2)
+                    )
+                    .to(torch.int64)
+                    .tolist()
+                )
+
+                # this variable is either 1 or -1 depending on whether the error in the counterfactual sentence prediction is higher than
+                # that in the factual sentence. It is 0 if there are no gender words.
+
             GE_batch = torch.cat(
-                [
-                    torch.unsqueeze(GE[j], dim=0)
-                    for j in range(len(GE))
-                ]
+                [torch.unsqueeze(GE[j], dim=0) for j in range(len(GE))]
             ).to(device)
-            GE_before_debiasing = torch.cat(
-                (GE_before_debiasing, GE_batch), 0
-            ).to(device)
+
+            GE_before_debiasing = torch.cat((GE_before_debiasing, GE_batch), 0).to(
+                device
+            )
+            stereotype_all += stereotype
 
         GE_epoch.append(GE_before_debiasing)
 
     GE_all = torch.cat(
-        [
-            torch.unsqueeze(GE_epoch[i], dim=0)
-            for i in range(len(GE_epoch))
-        ]
+        [torch.unsqueeze(GE_epoch[i], dim=0) for i in range(len(GE_epoch))]
     )
-    GE_mean = torch.mean(
-        torch.norm(GE_all, dim=2, p=2), dim=0
-    ).to(device)
+    GE_mean = torch.mean(torch.norm(GE_all, dim=2, p=2), dim=0).to(device)
 
-    return GE_mean
-
+    return GE_mean, stereotype_all
 
 
 def compute_forgetting_score(
@@ -215,7 +256,7 @@ def compute_forgetting_score(
     num_epochs_biased_model,
 ):
     """
-    Compute the forgettig scores as in https://arxiv.org/pdf/1812.05159.pdf as the number of times each training examples is forgotten during training.
+    Compute the forgettig scores as in https://arxiv.org/pdf/1812.05159.pdf as the number of times each training example is forgotten during training.
     Forgetting happens when the example is wrongly predicted after being correctly predicted.
     returns:
         forgetting_score: the number of times each training examples is forgotten during trianing, over multiple epochs.
@@ -248,17 +289,23 @@ def compute_forgetting_score(
             number_of_labels = len(set(train_dataset.labels))
             prediction_before_debiasing = torch.ones([0, number_of_labels]).to(device)
 
-            for i in range(int(np.ceil(len(train_dataset) / batch_size_debiased_model))):
+            for i in range(
+                int(np.ceil(len(train_dataset) / batch_size_debiased_model))
+            ):
                 with torch.no_grad():
                     prediction = model_before_debiasing.forward(
                         input_ids=torch.tensor(
                             train_dataset.encodings["input_ids"][
-                                i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                                i
+                                * batch_size_debiased_model : (i + 1)
+                                * batch_size_debiased_model
                             ]
                         ).to(device),
                         attention_mask=torch.tensor(
                             train_dataset.encodings["attention_mask"][
-                                i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                                i
+                                * batch_size_debiased_model : (i + 1)
+                                * batch_size_debiased_model
                             ]
                         ).to(device),
                     )["logits"]
@@ -288,12 +335,12 @@ def compute_forgetting_score(
 
     y_pred_before_debiasing = torch.argmax(prediction_all, axis=2)
     correct_predictions = ground_truth_labels == y_pred_before_debiasing
-    forgetting_scores = torch.sum(
+    forget_score = torch.sum(
         torch.logical_and(correct_predictions[:-1, :], ~correct_predictions[1:, :]),
         dim=0,
     ).to(device)
 
-    return forgetting_scores
+    return forget_score
 
 
 def compute_EL2N(
@@ -312,11 +359,13 @@ def compute_EL2N(
     scores in the very early stages of training, which was done on the first 20 epochs, given that their task needs 200 epochs for convergence.
     Since our tasks require 10-15 epochs for convergence, we compute the importance scores after 1 epoch.
     arguments that need explanation:
-        num_epochs_importance_score: Number of training epochs that we consider for computing the El2N importance scores.
+        num_epochs_importance_score: Number of training epochs that we consider for computing the EL2N importance scores.
     returns:
-        El2N importance scores: the score that tells us how importance each examples is for performance experiments.
+        EL2N importance scores: the score that tells us how important each example is for performance.
     """
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_biased_model * num_epochs_importance_score)
+    checkpoint_steps = int(
+        train_dataset.__len__() / batch_size_biased_model * num_epochs_importance_score
+    )
 
     if classifier_model in [
         "bert-base-cased",
@@ -332,30 +381,31 @@ def compute_EL2N(
 
     EL2N_epoch = []
 
-    model_checkpoint_path = (
-        model_dir + "/checkpoint-" + str(checkpoint_steps))
-    
+    model_checkpoint_path = model_dir + "/checkpoint-" + str(checkpoint_steps)
+
     if os.path.isdir(model_checkpoint_path):
         model_before_debiasing = huggingface_model.from_pretrained(
             model_checkpoint_path, num_labels=len(set(train_dataset.labels))
         ).to(device)
 
         number_of_labels = len(set(train_dataset.labels))
-        EL2N_before_debiasing = torch.ones([0, number_of_labels]).to(
-            device
-        )
+        EL2N_before_debiasing = torch.ones([0, number_of_labels]).to(device)
 
         for i in range(int(np.ceil(len(train_dataset) / batch_size_debiased_model))):
             with torch.no_grad():
                 prediction_original_gender = model_before_debiasing.forward(
                     input_ids=torch.tensor(
                         train_dataset.encodings["input_ids"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                     attention_mask=torch.tensor(
                         train_dataset.encodings["attention_mask"][
-                            i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                 )["logits"]
@@ -364,7 +414,11 @@ def compute_EL2N(
                     device
                 ) - torch.nn.functional.one_hot(
                     torch.tensor(
-                        train_dataset.labels[i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model]
+                        train_dataset.labels[
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
+                        ]
                     ),
                     num_classes=len(set(train_dataset.labels)),
                 ).to(
@@ -372,10 +426,7 @@ def compute_EL2N(
                 )
 
             EL2N_batch = torch.cat(
-                [
-                    torch.unsqueeze(EL2N[j], dim=0)
-                    for j in range(len(EL2N))
-                ]
+                [torch.unsqueeze(EL2N[j], dim=0) for j in range(len(EL2N))]
             ).to(device)
             EL2N_before_debiasing = torch.cat(
                 (EL2N_before_debiasing, EL2N_batch), 0
@@ -384,13 +435,8 @@ def compute_EL2N(
         EL2N_epoch.append(EL2N_before_debiasing)
 
     EL2N_all = torch.cat(
-        [
-            torch.unsqueeze(EL2N_epoch[i], dim=0)
-            for i in range(len(EL2N_epoch))
-        ]
+        [torch.unsqueeze(EL2N_epoch[i], dim=0) for i in range(len(EL2N_epoch))]
     )
-    EL2N_mean = torch.mean(
-        torch.norm(EL2N_all, dim=2, p=2), dim=0
-    ).to(device)
+    EL2N_mean = torch.mean(torch.norm(EL2N_all, dim=2, p=2), dim=0).to(device)
 
     return EL2N_mean
