@@ -9,7 +9,7 @@ Healthy data diet can be summarized as follows:
 3. **Adding a pruned version of the original dataset to the important counterfactual examples**: 
 
 <div style="text-align: center">
-<img src="images/Healthy_diet_recipe.pdf" width="800">
+<img src="images/Healthy_diet_recipe.png" width="800">
 <p style="text-align: center;"> <b>Figure:</b> The pipeline used in of the policy gradient approach. </p>
 </div>
 
