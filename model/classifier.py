@@ -2,9 +2,7 @@ from transformers import TrainingArguments, Trainer
 from transformers import BertForSequenceClassification, RobertaForSequenceClassification
 from transformers import EarlyStoppingCallback
 from model.data_loader import data_loader
-from pathlib import Path
 import torch
-import os
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -20,17 +18,15 @@ def train_biased_classifier(
     data_substitution_ratio,
     max_length,
     classifier_model,
-    batch_size_pretraining,
+    batch_size_biased_model,
     model_dir,
     use_amulet,
-    num_epochs_pretraining,
+    num_epochs_biased_model,
     learning_rate,
     seed,
 ):
     """
-    Train a classifier to be used as our starting point for polcy gradient.
-    We can either train from scratch or load a pretrained model depending on
-    the user's choice.
+    Train the biased classifier.
     args:
         dataset: the dataset used
         CDA_examples_ranking: the ranking of the CDA examples
@@ -41,14 +37,14 @@ def train_biased_classifier(
         data_substitution_ratio: The ratio of the dataset examples that are flipped in data substitution.
         max_length: The maximum length of the sentences that we classify (in terms of the number of tokens)
         classifier_model: the model name
-        batch_size_pretraining: the batch size for the pretraining (training the biased model)
+        batch_size_biased_model: the batch size for the pretraining (training the biased model)
         model_dir: the Directory to the model
         use_amulet: whether or not to run the code on Amulet, which is the cluster used at Microsoft research
-        num_epochs_pretraining: the number of epochs to train the biased model, which is done before bias mitigation
+        num_epochs_biased_model: the number of epochs to train the biased model, which is done before bias mitigation
         learning_rate: the learning rate of the classifier
         seed: the seed used by the classifier
     returns:
-        model: the model after pre-training
+        model: the model after training
     """
     # Load the dataset
     train_dataset, val_dataset, test_dataset = data_loader(
@@ -64,7 +60,7 @@ def train_biased_classifier(
         classifier_model,
     )
     # The number of epochs afterwhich we save the model.
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
+    checkpoint_steps = int(train_dataset.__len__() / batch_size_biased_model)
 
     if classifier_model in [
         "bert-base-cased",
@@ -81,7 +77,7 @@ def train_biased_classifier(
     # Define pretrained tokenizer and model
     model_name = classifier_model
     model = huggingface_model.from_pretrained(
-        model_name,
+        "./saved_models/cached_models/" + model_name,
         num_labels=len(set(train_dataset.labels)),
     )
 
@@ -94,9 +90,10 @@ def train_biased_classifier(
         output_dir=model_dir,
         evaluation_strategy="steps",
         eval_steps=checkpoint_steps,
-        per_device_train_batch_size=batch_size_pretraining,
-        per_device_eval_batch_size=batch_size_pretraining,
-        num_train_epochs=num_epochs_pretraining,
+        save_steps=checkpoint_steps,
+        per_device_train_batch_size=batch_size_biased_model,
+        per_device_eval_batch_size=batch_size_biased_model,
+        num_train_epochs=num_epochs_biased_model,
         learning_rate=learning_rate,
         seed=seed,
         load_best_model_at_end=True,

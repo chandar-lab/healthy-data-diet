@@ -3,7 +3,6 @@ from model.data_loader import data_loader
 from sklearn.metrics import roc_auc_score
 from pathlib import Path
 import torch
-import os
 import json
 import numpy as np
 import torch.nn.functional as F
@@ -30,8 +29,8 @@ def assess_performance_and_bias(
     model_dir,
     use_amulet,
     method,
-    batch_size_pretraining,
-    batch_size,
+    batch_size_biased_model,
+    batch_size_debiased_model,
     use_wandb,
 ):
     """
@@ -48,6 +47,7 @@ def assess_performance_and_bias(
     7) Demographic parity
     8) Equality of odds
     args:
+        seed: the seed_used
         model_after_bias_reduction: the model after updating its weights due to bias reduction
         dataset: the dataset used
         CDA_examples_ranking: the ranking of the CDA examples
@@ -62,8 +62,8 @@ def assess_performance_and_bias(
         model_dir: the Directory to the model
         use_amulet: whether or not to run the code on Amulet, which is the cluster used at Microsoft research
         method: the debiasing method used
-        batch_size_pretraining: the batch size for the pretraining (training the biased model)
-        batch_size: the batch size for the training of the debiased model
+        batch_size_biased_model: the batch size for the pretraining (training the biased model)
+        batch_size_debiased_model: the batch size for the training of the debiased model
         use_wandb: whether or not to use wandb
 
         the function doesnt return anything, since all the metrics are saved in json files.
@@ -92,8 +92,6 @@ def assess_performance_and_bias(
 
     num_labels = len(set(train_dataset.labels))
 
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
-
     if classifier_model in [
         "bert-base-cased",
         "bert-large-cased",
@@ -106,7 +104,7 @@ def assess_performance_and_bias(
     elif classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-    model_checkpoint_path = model_dir + "/checkpoint-" + str(checkpoint_steps)
+    model_checkpoint_path = "./saved_models/cached_models/" + classifier_model
     model_before_bias_reduction = huggingface_model.from_pretrained(
         model_checkpoint_path, num_labels=len(set(val_dataset.labels))
     ).to(device)
@@ -114,7 +112,21 @@ def assess_performance_and_bias(
     # Load the model that has the best performance on the validation data
     model_before_bias_reduction.load_state_dict(
         torch.load(
-            model_dir + classifier_model + "_" + dataset + "_biased_best.pt",
+            model_dir
+            + classifier_model
+            + "_"
+            + dataset
+            + "_"
+            + method
+            + "_"
+            + data_diet_examples_ranking
+            + "_"
+            + str(data_augmentation_ratio)
+            + "_"
+            + str(data_diet_factual_ratio)
+            + "_"
+            + str(data_diet_counterfactual_ratio)
+            + "_biased_best.pt",
             map_location=device,
         )
     )
@@ -133,6 +145,7 @@ def assess_performance_and_bias(
             TPED,
             TNED,
             demographic_parity,
+            validation_bias,
             equality_of_odds,
         ) = compute_metrics(
             split,
@@ -140,7 +153,7 @@ def assess_performance_and_bias(
             dataset,
             model_before_bias_reduction,
             model_after_bias_reduction,
-            batch_size,
+            batch_size_debiased_model,
             num_labels,
             output_dir,
             use_amulet,
@@ -159,10 +172,12 @@ def assess_performance_and_bias(
                 equality_of_odds,
             ]:
                 all_metrics.append(metric)
+        elif split_name == "validation":
+            for metric in [AUC, accuracy, validation_bias]:
+                all_metrics.append(metric)
         else:
             for metric in [AUC, accuracy]:
                 all_metrics.append(metric)
-
 
     # We create a directory for saving the metrics, if it doesnt exist
     file_directory = output_dir + dataset + "_" + method + "_" + classifier_model
@@ -181,7 +196,7 @@ def compute_metrics(
     dataset_name,
     model_before_bias_reduction,
     model_after_bias_reduction,
-    batch_size,
+    batch_size_debiased_model,
     num_labels,
     output_dir,
     use_amulet,
@@ -198,7 +213,7 @@ def compute_metrics(
         dataset_name: the name of the dataset used
         model_before_bias_reduction: the model before updating its weights for bias reduction
         model_after_bias_reduction: the model after updating its weights for bias reduction
-        batch_size: the size of the batch used
+        batch_size_debiased_model: the size of the batch used
         num_labels: the numnber of labels in the dataset
         output_dir: the directory to the output
         use_amulet: whether or not to run the code on Amulet, which is the cluster used at Microsoft research
@@ -221,24 +236,30 @@ def compute_metrics(
         TPED = {}
         TNED = {}
         demographic_parity = {}
+        validation_bias = {}
         equal_opportunity_y_equal_0 = {}
         equal_opportunity_y_equal_1 = {}
         equality_of_odds = {}
 
         y_pred_after_bias_reduction = torch.ones([0, num_labels]).to(device)
         y_pred_before_bias_reduction = torch.ones([0, num_labels]).to(device)
+        y_pred_gender_swap_after_bias_reduction = torch.ones([0, num_labels]).to(device)
 
-        for i in range(int(np.ceil(len(split_dataset) / batch_size))):
+        for i in range(int(np.ceil(len(split_dataset) / batch_size_debiased_model))):
 
             results_after_bias_reduction = model_after_bias_reduction.forward(
                 input_ids=torch.tensor(
                     split_dataset.encodings["input_ids"][
-                        i * batch_size : (i + 1) * batch_size
+                        i
+                        * batch_size_debiased_model : (i + 1)
+                        * batch_size_debiased_model
                     ]
                 ).to(device),
                 attention_mask=torch.tensor(
                     split_dataset.encodings["attention_mask"][
-                        i * batch_size : (i + 1) * batch_size
+                        i
+                        * batch_size_debiased_model : (i + 1)
+                        * batch_size_debiased_model
                     ]
                 ).to(device),
             )[0]
@@ -246,15 +267,40 @@ def compute_metrics(
             results_before_bias_reduction = model_before_bias_reduction.forward(
                 input_ids=torch.tensor(
                     split_dataset.encodings["input_ids"][
-                        i * batch_size : (i + 1) * batch_size
+                        i
+                        * batch_size_debiased_model : (i + 1)
+                        * batch_size_debiased_model
                     ]
                 ).to(device),
                 attention_mask=torch.tensor(
                     split_dataset.encodings["attention_mask"][
-                        i * batch_size : (i + 1) * batch_size
+                        i
+                        * batch_size_debiased_model : (i + 1)
+                        * batch_size_debiased_model
                     ]
                 ).to(device),
             )[0]
+
+            if split_name == "validation":
+                # Compute the predictions for the gender-swapped validation examples to determine the fairness hyperparameters a and b
+                results_gender_swap_after_bias_reduction = (
+                    model_after_bias_reduction.forward(
+                        input_ids=torch.tensor(
+                            split_dataset.encodings_gender_swap["input_ids"][
+                                i
+                                * batch_size_debiased_model : (i + 1)
+                                * batch_size_debiased_model
+                            ]
+                        ).to(device),
+                        attention_mask=torch.tensor(
+                            split_dataset.encodings_gender_swap["attention_mask"][
+                                i
+                                * batch_size_debiased_model : (i + 1)
+                                * batch_size_debiased_model
+                            ]
+                        ).to(device),
+                    )[0]
+                )
 
             # Get the predictions of the new batch
             batch_original_gender = results_after_bias_reduction
@@ -269,6 +315,14 @@ def compute_metrics(
             y_pred_before_bias_reduction = torch.cat(
                 (y_pred_before_bias_reduction, batch_original_gender), 0
             )
+
+            if split_name == "validation":
+                # Get the predictions of the new gender-swapped batch
+                batch_gender_swap = results_gender_swap_after_bias_reduction
+                # Add them to the total predictions
+                y_pred_gender_swap_after_bias_reduction = torch.cat(
+                    (y_pred_gender_swap_after_bias_reduction, batch_gender_swap), 0
+                )
         # ===================================================#
         # Here we calculate the accuracy
         accuracy[split_name + " accuracy before bias reduction"] = (
@@ -312,6 +366,20 @@ def compute_metrics(
                 np.array(F.softmax(y_pred_after_bias_reduction, 1).cpu())[:, 1],
             )
 
+        if split_name == "validation":
+            # We compute the bias on the validation dataset to set the hyperparameters, while the IPTTS dataset is to compute the final bias using the best hyperparameters
+            validation_bias[split_name + " bias after bias reduction"] = torch.abs(
+                torch.sum(
+                    torch.argmax(y_pred_after_bias_reduction, axis=1)
+                    .double()
+                    .to(device)
+                )
+                - torch.sum(
+                    torch.argmax(y_pred_gender_swap_after_bias_reduction, axis=1)
+                    .double()
+                    .to(device)
+                )
+            ).tolist()
         #### Log the AUC metric
         logs = dict()
 
@@ -321,8 +389,12 @@ def compute_metrics(
         logs[split_name + " AUC after bias reduction"] = AUC[
             split_name + " AUC after bias reduction"
         ]
-        if use_wandb:
-            wandb.log(logs)
+        if split_name == "validation":
+            logs[split_name + " bias after bias reduction"] = validation_bias[
+                split_name + " bias after bias reduction"
+            ]
+
+        wandb.log(logs)
         # ===================================================#
         # Here we calculate the FPR
 
@@ -441,11 +513,9 @@ def compute_metrics(
             data_IPTTS["prediction after debiasing"] = list(
                 F.softmax(y_pred_after_bias_reduction, 1)[:, 1].cpu().detach().numpy()
             )
-
             data_IPTTS["number of tokens"] = data_IPTTS[data_IPTTS.columns[0]].apply(
                 lambda x: len(re.findall(r"\w+", x))
             )
-
             # We create a directory for saving the analysis file, if it doesnt exist
             file_directory = output_dir + "analysis/"
 
@@ -709,9 +779,7 @@ def compute_metrics(
                 "demographic parity after bias reduction"
             ]
 
-
-            if use_wandb:
-                wandb.log(logs)
+            wandb.log(logs)
 
         return (
             AUC,
@@ -721,5 +789,6 @@ def compute_metrics(
             TPED,
             TNED,
             demographic_parity,
+            validation_bias,
             equality_of_odds,
         )

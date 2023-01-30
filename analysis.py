@@ -1,11 +1,3 @@
-from model.data_loader import data_loader
-from utils import find_biased_examples, log_topk_attention_tokens
-from importance_scores import (
-    compute_GradN,
-    compute_El2N_fairness,
-    compute_forgetting_score,
-    compute_El2N_performance,
-)
 from utils import compute_confidence_and_variability
 import pandas as pd
 from transformers import BertForSequenceClassification, RobertaForSequenceClassification
@@ -13,10 +5,15 @@ from transformers import BertTokenizer, RobertaTokenizer
 import torch
 import re
 import numpy as np
-import os
-
-# from gender_bender import gender_bend
 from pathlib import Path
+from model.data_loader import data_loader
+from utils import find_biased_examples, log_topk_attention_tokens
+from importance_scores import (
+    compute_GraNd,
+    compute_GE,
+    compute_forgetting_score,
+    compute_EL2N,
+)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -35,11 +32,11 @@ def analyze_results(
     max_length,
     classifier_model,
     compute_importance_scores,
-    num_epochs_pretraining,
-    batch_size_pretraining,
+    num_epochs_biased_model,
+    batch_size_biased_model,
     output_dir,
     model_dir,
-    batch_size,
+    batch_size_debiased_model,
     analyze_attention,
     use_amulet,
     num_epochs_importance_score,
@@ -52,7 +49,9 @@ def analyze_results(
     1) Attention weights: We log the top k tokens to which the classification token (CLS) attends before and after de-biasing.
     2) Type of examples: We follow the procedure in https://arxiv.org/pdf/2009.10795.pdf where the examples
         are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous". The intuition is to know which category is mostly affected by the de-biasing algorithm.
+    3) Compute the validation and test performances.
     args:
+        seed: the seed used
         dataset: the dataset used
         CDA_examples_ranking: the ranking of the CDA examples
         data_augmentation_ratio: The ratio of data augmentation that we apply, given that the debiasing is using data augmentation
@@ -63,14 +62,14 @@ def analyze_results(
         max_length: The maximum length of the sentences that we classify (in terms of the number of tokens)
         classifier_model: the model name
         compute_importance_scores: whether or not to compute the importance scores
-        num_epochs_pretraining: the number of epochs for the pretraining (training the biased model)
-        batch_size_pretraining: the batch size for the pretraining (training the biased model)
+        num_epochs_biased_model: the number of epochs for the biased model
+        batch_size_biased_model: the batch size for the biased model
         output_dir: the output directory that contains the results
         model_dir: the Directory to the model
-        batch_size: the batch size for the training of the debiased model
+        batch_size_debiased_model: the batch size for the training of the debiased model
         analyze_attention: whether or not to compute the distribution of the attention weights
         use_amulet: whether or not to use Microsoft cluster
-        num_epochs_importance_score: the number of epochs that we consider for copmuting the importance scores EL2N and GradN
+        num_epochs_importance_score: the number of epochs that we consider for copmuting the importance scores EL2N and GraNd
         num_epochs_confidence_variability: the number fo epochs that we consider while computing the confidence and variability
         num_tokens_logged: the top k tokens  that we consider, which the CLS tokens attends to
         method: the debiasing method used
@@ -92,60 +91,63 @@ def analyze_results(
 
     if compute_importance_scores:
         data_train = pd.read_csv("./data/" + dataset + "_train_original_gender.csv")
-        if CDA_examples_ranking == "El2N_fairness":
-            # We can only compute the fairness importance scores if the model is trained for more than 1 epoch.
+        if CDA_examples_ranking == "GE":
+            # This computes our GE score
+            GE_mean, stereotype_all = compute_GE(
+                batch_size_biased_model,
+                classifier_model,
+                output_dir,
+                model_dir,
+                use_amulet,
+                num_epochs_importance_score,
+                batch_size_debiased_model,
+                train_dataset,
+            )
+
+            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
+                GE_mean.cpu().detach().numpy()
+            )
+
+            data_train[str(classifier_model) + " stereotype"] = stereotype_all
+
+        elif CDA_examples_ranking == "EL2N":
             # It is computed on the training dataset, as in https://arxiv.org/pdf/2107.07075.pdf
-
-            El2N_fairness_mean = compute_El2N_fairness(
-                batch_size_pretraining,
+            EL2N_mean = compute_EL2N(
+                batch_size_biased_model,
                 classifier_model,
                 output_dir,
                 model_dir,
                 use_amulet,
                 num_epochs_importance_score,
-                batch_size,
+                batch_size_debiased_model,
                 train_dataset,
             )
 
             data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
-                El2N_fairness_mean.cpu().detach().numpy()
+                EL2N_mean.cpu().detach().numpy()
             )
 
-        elif CDA_examples_ranking == "El2N_performance":
-            El2N_performance_mean = compute_El2N_performance(
-                batch_size_pretraining,
+        elif CDA_examples_ranking == "forget_score":
+            # Based on https://arxiv.org/pdf/1812.05159.pdf
+            forget_score = compute_forgetting_score(
+                batch_size_biased_model,
                 classifier_model,
                 output_dir,
                 model_dir,
                 use_amulet,
-                num_epochs_importance_score,
-                batch_size,
+                batch_size_debiased_model,
                 train_dataset,
+                num_epochs_biased_model,
             )
 
             data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
-                El2N_performance_mean.cpu().detach().numpy()
+                forget_score.cpu().detach().numpy()
             )
 
-        elif CDA_examples_ranking == "forgetting_scores":
-            forgetting_scores = compute_forgetting_score(
-                batch_size_pretraining,
-                classifier_model,
-                output_dir,
-                model_dir,
-                use_amulet,
-                batch_size,
-                train_dataset,
-                num_epochs_pretraining,
-            )
-
-            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
-                forgetting_scores.cpu().detach().numpy()
-            )
-
-        elif CDA_examples_ranking == "GradN":
-            GradN = compute_GradN(
-                batch_size_pretraining,
+        elif CDA_examples_ranking == "GraNd":
+            # See https://arxiv.org/pdf/2107.07075.pdf
+            GraNd = compute_GraNd(
+                batch_size_biased_model,
                 classifier_model,
                 output_dir,
                 model_dir,
@@ -154,9 +156,12 @@ def analyze_results(
                 train_dataset,
             )
 
-            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(GradN.cpu().detach().numpy())
+            data_train[str(classifier_model) + " " + CDA_examples_ranking] = list(
+                GraNd.cpu().detach().numpy()
+            )
 
     for split in ["valid", "test"]:
+        # Compute the validation and test performance
         data = pd.read_csv("./data/" + dataset + "_" + split + "_original_gender.csv")
 
         if split == "valid":
@@ -164,20 +169,20 @@ def analyze_results(
         elif split == "test":
             dataset_split = test_dataset
 
-        if num_epochs_pretraining > 1 and split == "valid":
+        if num_epochs_biased_model > 1 and split == "valid":
             # We can only compute the confidence and variability when the biased model is trained for more than 1 epoch.
             # It is computed on the validation dataset
             (
                 confidence_before_debiasing,
                 variability_before_debiasing,
             ) = compute_confidence_and_variability(
-                batch_size_pretraining,
+                batch_size_biased_model,
                 classifier_model,
                 output_dir,
                 model_dir,
                 use_amulet,
-                batch_size,
-                num_epochs_pretraining,
+                batch_size_debiased_model,
+                num_epochs_biased_model,
                 num_epochs_confidence_variability,
                 train_dataset,
                 val_dataset,
@@ -190,10 +195,7 @@ def analyze_results(
                 variability_before_debiasing.cpu().detach().numpy()
             )
 
-        checkpoint_steps = int(train_dataset.__len__() / batch_size_pretraining)
-
-        model_checkpoint_path = model_dir + "/checkpoint-" + str(checkpoint_steps)
-
+        model_checkpoint_path = "./saved_models/cached_models/" + classifier_model
         if classifier_model in [
             "bert-base-cased",
             "bert-large-cased",
@@ -224,24 +226,42 @@ def analyze_results(
         # Load the model that has the de-biased model
         model_before_debiasing.load_state_dict(
             torch.load(
-                model_dir + classifier_model + "_" + dataset + "_biased_best.pt",
+                model_dir
+                + classifier_model
+                + "_"
+                + dataset
+                + "_"
+                + method
+                + "_"
+                + data_diet_examples_ranking
+                + "_"
+                + str(data_augmentation_ratio)
+                + "_"
+                + str(data_diet_factual_ratio)
+                + "_"
+                + str(data_diet_counterfactual_ratio)
+                + "_biased_best.pt",
                 map_location=device,
             )
         )
 
         number_of_labels = len(set(dataset_split.labels))
         prediction_before_debiasing = torch.ones([0, number_of_labels]).to(device)
-        for i in range(int(np.ceil(len(dataset_split) / batch_size))):
+        for i in range(int(np.ceil(len(dataset_split) / batch_size_debiased_model))):
             with torch.no_grad():
                 prediction = model_before_debiasing.forward(
                     input_ids=torch.tensor(
                         dataset_split.encodings["input_ids"][
-                            i * batch_size : (i + 1) * batch_size
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                     attention_mask=torch.tensor(
                         dataset_split.encodings["attention_mask"][
-                            i * batch_size : (i + 1) * batch_size
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                 )["logits"]
@@ -265,7 +285,7 @@ def analyze_results(
         # =======================================================
         # Load the model after debiasing
         model_after_debiasing = huggingface_model.from_pretrained(
-            classifier_model,
+            "./saved_models/cached_models/" + classifier_model,
             num_labels=len(set(train_dataset.labels)),
             output_attentions=analyze_attention,
         )
@@ -276,26 +296,38 @@ def analyze_results(
                 model_dir
                 + classifier_model
                 + "_"
+                + dataset
+                + "_"
                 + method
                 + "_"
-                + dataset
+                + data_diet_examples_ranking
+                + "_"
+                + str(data_augmentation_ratio)
+                + "_"
+                + str(data_diet_factual_ratio)
+                + "_"
+                + str(data_diet_counterfactual_ratio)
                 + "_debiased_best.pt",
                 map_location=device,
             )
         )
 
         prediction_after_debiasing = torch.ones([0, number_of_labels]).to(device)
-        for i in range(int(np.ceil(len(dataset_split) / batch_size))):
+        for i in range(int(np.ceil(len(dataset_split) / batch_size_debiased_model))):
             with torch.no_grad():
                 prediction = model_after_debiasing.forward(
                     input_ids=torch.tensor(
                         dataset_split.encodings["input_ids"][
-                            i * batch_size : (i + 1) * batch_size
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                     attention_mask=torch.tensor(
                         dataset_split.encodings["attention_mask"][
-                            i * batch_size : (i + 1) * batch_size
+                            i
+                            * batch_size_debiased_model : (i + 1)
+                            * batch_size_debiased_model
                         ]
                     ).to(device),
                 )["logits"]
@@ -316,7 +348,7 @@ def analyze_results(
 
         if analyze_attention:
             data = log_topk_attention_tokens(
-                batch_size,
+                batch_size_debiased_model,
                 num_tokens_logged,
                 data,
                 model_before_debiasing,
@@ -355,7 +387,6 @@ def analyze_results(
             lambda x: len(re.findall(r"\w+", x))
         )
 
-            
         file_directory = output_dir + "analysis/"
         Path(file_directory).mkdir(parents=True, exist_ok=True)
         data.to_csv(
@@ -382,6 +413,8 @@ def analyze_results(
             + method
             + "_"
             + classifier_model
+            + "_"
+            + CDA_examples_ranking
             + ".csv",
             index=False,
         )
