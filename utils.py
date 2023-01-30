@@ -1,148 +1,348 @@
-import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.feature_extraction.text import TfidfTransformer
-from transformers import BertForSequenceClassification, RobertaForSequenceClassification
-import torch
+# Main script for gathering args.
+from model.metrics import assess_performance_and_bias
+from argparse import ArgumentParser
+from analysis import analyze_results
 import numpy as np
+import zipfile
+from transformers import TrainingArguments, Trainer
+from transformers import EarlyStoppingCallback
+from pathlib import Path
+import torch
 import os
-
+from model.classifier import train_biased_classifier
+from transformers import BertForSequenceClassification, RobertaForSequenceClassification
+from model.data_loader import data_loader
+import wandb
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 softmax = torch.nn.Softmax(dim=1).to(device)
 
 
-def detect_gender_words(top_attention_tokens):
-    """
-    This function detects whether or not the top k tokens to which the CLS token
-    attends contain gender words. This is achieved by comparing the tokens
-    before and after gender flipping. If they are identical, then there are no
-    gender words, and vice versa.
-    args:
-        top_attention_tokens: a list of the top k tokens that the CLS token attends to
-    returns:
-        contains_gender_words: a list of boolean variables that says whether
-        there are gender words among the top k tokens that the CLS attends to
-        in every example.
-    """
-    # We log whether or not the top k attention tokens contain gender words.
-    contains_gender_words = []
-    for i in range(len(top_attention_tokens[0])):
-        # We need to convert the attention tokens into strings to be able to do gender flipping
-        top_attention_tokens_string = " ".join(
-            [str(elem) for elem in top_attention_tokens[0][i]]
-        )
-        contains_gender_words.append(
-            top_attention_tokens_string != gender_bend(top_attention_tokens_string)
-        )
-
-    return contains_gender_words
-
-
-def find_biased_examples(dataset_name, data):
-    """
-    Find the examples that contain bias or spurious correlation by training a simple
-    logisitc regression classifier and choosing the examples that the model
-    classifies with very high/low p(y|x) according to some threshold. This defninition
-    is also followed in this paper: https://arxiv.org/pdf/2010.02458.pdf
-    args:
-        dataset_name: the name of the dataset used
-        data: the csv file of the dataset that we want to analyze
-    returns:
-        the function returns the predictions of the logistic regression classifier
-    """
-    data_train = pd.read_csv("./data/" + dataset_name + "_train_original_gender.csv")
-    count_vect = CountVectorizer()
-    X_train_counts = count_vect.fit_transform(list(data_train[data_train.columns[0]]))
-
-    tf_transformer = TfidfTransformer(use_idf=False).fit(X_train_counts)
-    X_train_tf = tf_transformer.transform(X_train_counts)
-    clf = LogisticRegression(random_state=0, solver="lbfgs", max_iter=1000).fit(
-        X_train_tf, list(data_train[data_train.columns[1]])
+def parse_args():
+    """Parses the command line arguments."""
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--method",
+        choices=[
+            "data_augmentation",
+            "data_substitution",
+            "data_balancing",
+            "blindness",
+            "data_diet",
+        ],
+        default="data_substitution",
+        help="Choosing between our work and some of the baseline methods.",
+    )
+    parser.add_argument(
+        "--batch_size_debiased_model", type=int, default=64, help="Samples per batch"
+    )
+    parser.add_argument(
+        "--num_epochs_debiased_model",
+        type=int,
+        default=1,
+        help="Number of training epochs for the training of the debiased model",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="The seed that we are running the experiment for. We run every experiment for 5 seeds.",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=1e-6,
+        help="learning rate for the optimizer",
+    )
+    parser.add_argument(
+        "--classifier_model",
+        choices=[
+            "bert-base-cased",
+            "bert-base-uncased",
+            "bert-large-cased",
+            "bert-large-uncased",
+            "roberta-base",
+            "distilroberta-base",
+            "distilbert-base-cased",
+            "distilbert-base-uncased",
+        ],
+        default="bert-base-uncased",
+        help="Type of classifier used",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=[
+            "Jigsaw",
+            "Wiki",
+            "Twitter",
+            "HateBase",
+            "EEEC",
+        ],
+        default="Twitter",
+        help="Type of dataset used",
+    )
+    parser.add_argument(
+        "--num_epochs_biased_model",
+        type=int,
+        default=1,
+        help="Number of epochs for the training of the biased classifier, which precedes the debiasing.",
+    )
+    parser.add_argument(
+        "--num_epochs_confidence_variability",
+        type=int,
+        default=5,
+        help="Number of training epochs that we consider for computing the confidence and variability scores",
+    )
+    parser.add_argument(
+        "--num_epochs_importance_score",
+        type=float,
+        default=1,
+        help="Number of training epochs that we consider for computing the EL2N and GraNd importance scores. Following the paper, we set it to 10% of the number of epochs needed for convergence",
+    )
+    parser.add_argument(
+        "--batch_size_biased_model",
+        type=int,
+        default=64,
+        help="Batch size for the training of the biased model.",
+    )
+    parser.add_argument(
+        "--compute_importance_scores",
+        type=bool,
+        default=False,
+        help="Whether or not to compute importance scores",
+    )
+    parser.add_argument(
+        "--max_length",
+        type=int,
+        default=100,
+        help="The maximum length of the sentences that we classify (in terms of the number of tokens)",
+    )
+    parser.add_argument(
+        "--model_checkpoint_path",
+        default="./saved_models/checkpoint-",
+        help="Path to the saved classifier checkpoint",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="output/",
+        help="Directory to the output",
+    )
+    parser.add_argument(
+        "--model_dir",
+        default="saved_models/",
+        help="Directory to saved models",
+    )
+    parser.add_argument(
+        "--use_wandb",
+        type=bool,
+        default=False,
+        help="Whether or not to use wandb to visualize the results",
+    )
+    parser.add_argument(
+        "--use_amulet",
+        type=bool,
+        default=False,
+        help="Whether or not to run the code on Amulet, which is the cluster used at Microsoft research",
+    )
+    parser.add_argument(
+        "--CDA_examples_ranking",
+        choices=[
+            "GE",
+            "EL2N",
+            "forget_score",
+            "GraNd",
+            "random",
+        ],
+        default="random",
+        help="Type of rankings we use to pick up the examples in data augmentation. We choose form the EL2N/GraNd in https://arxiv.org/pdf/2107.07075.pdf, our GE score for fairness which we propose, random ranking, or forgetting scores https://arxiv.org/pdf/1812.05159.pdf",
+    )
+    parser.add_argument(
+        "--data_diet_examples_ranking",
+        choices=[
+            "healthy_EL2N",
+            "healthy_forget_score",
+            "healthy_GraNd",
+            "vanilla_GE",
+            "EL2N",
+            "forget_score",
+            "GraNd",
+            "healthy_GE",
+            "unhealthy_GE",
+            "random",
+            "healthy_random",
+            "super_healthy_random",
+            "unhealthy_random",
+            "healthy_data_diet",
+            "unhealthy_data_diet",
+        ],
+        default="random",
+        help="Type of rankings we use to pick up the examples in data pruning.",
+    )
+    parser.add_argument(
+        "--data_substitution_position",
+        choices=[
+            "beginning",
+            "end",
+            "everywhere",
+        ],
+        default="everywhere",
+        help="The position of the examples that are flipped in data substitution. It can be only for the tokens in the begnning/end of the sentence, or just everywhere (the default)",
+    )
+    parser.add_argument(
+        "--data_substitution_ratio",
+        type=float,
+        default=0,
+        help="The ratio of the dataset examples that are flipped in data substitution. It is set to 0.5 in the original CDS paper",
+    )
+    parser.add_argument(
+        "--data_augmentation_ratio",
+        type=float,
+        default=1,
+        help="The ratio of the dataset examples that are flipped in data augmentation. It is set to 1 in the original CDA paper",
+    )
+    parser.add_argument(
+        "--data_diet_factual_ratio",
+        type=float,
+        default=1,
+        help="The ratio of the factual examples that we train on while using data diet.",
+    )
+    parser.add_argument(
+        "--data_diet_counterfactual_ratio",
+        type=float,
+        default=1,
+        help="The ratio of the counterfactual examples that we train on while using data diet.",
+    )
+    # arguments for analysing the data
+    parser.add_argument(
+        "--analyze_results",
+        type=bool,
+        default=True,
+        help="Whether or not to analyze the results by finding the examples that flipped from wrongly predicted to correctly predicted, computing the top tokens that the model attends to, and the test and validation performances",
+    )
+    parser.add_argument(
+        "--analyze_attention",
+        type=bool,
+        default=False,
+        help="Whether or not to analyze the attention map",
+    )
+    parser.add_argument(
+        "--num_tokens_logged",
+        type=int,
+        default=5,
+        help="The value of k given that we log the top k tokens that the classification token attends to",
     )
 
-    X_counts = count_vect.transform(data[data.columns[0]])
-    X_tf = tf_transformer.transform(X_counts)
-
-    prediction_logistic_reg = clf.predict_proba(X_tf)
-
-    return prediction_logistic_reg
+    return parser.parse_args()
 
 
-def average_attention_map_all_heads(dataset, model, batch_size_debiased_model):
-    """
-    This function adds the attention weight maps (per example) in all the heads in the model
-    args:
-        dataset: the dataset for which the attention maps are computed
-        model: the model used to get the attention map
-        batch_size_debiased_model: the size of our batch during training the debiasing model
-    returns:
-        the function returns a Pytorch tensor that has the average of the attention
-        map over all the heads in the model for each example
-    """
-    all_heads_attention_batch = []
-    maximum_tokens = dataset[:]["input_ids"].shape[1]
-    all_heads_attention_per_example = torch.ones(
-        [0, maximum_tokens, maximum_tokens]
-    ).to(device)
-    for i in range(int(np.ceil(len(dataset) / batch_size_debiased_model))):
-        with torch.no_grad():
-            attention = model.forward(
-                input_ids=torch.tensor(
-                    dataset.encodings["input_ids"][
-                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
-                    ]
-                ).to(device),
-                attention_mask=torch.tensor(
-                    dataset.encodings["attention_mask"][
-                        i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
-                    ]
-                ).to(device),
-            )["attentions"]
+if __name__ == "__main__":
+    args = parse_args()
+    assert args.data_diet_counterfactual_ratio != 0 or args.data_diet_factual_ratio != 0
+    # We cannot have both the data_diet_factual_ratio and data_diet_counterfactual_ratio be zero, because this means there is no training data.
+    with zipfile.ZipFile("./bias_dataset_arxiv.zip", "r") as zip_ref:
+        zip_ref.extractall("./data")
 
-        attention_per_head = torch.cat(
-            [torch.unsqueeze(attention[j], dim=0) for j in range(len(attention))]
-        ).to(device)
-        all_heads_attention_batch = torch.mean(
-            attention_per_head,
-            dim=[0, 2],
+    if args.use_wandb:
+        wandb_mode = "online"
+    else:
+        wandb_mode = "offline"
+
+    if args.seed != None:
+        my_seed = args.seed
+    else:
+        my_seed = np.random.randint(10000, size=1)[0]
+
+    wandb.init(
+        name=str(args.dataset),
+        project="Deep learning on healthy data diet",
+        config=args,
+        mode=wandb_mode,
+    )
+
+    model_name = args.classifier_model
+    model_dir = args.model_dir + "/" + model_name + "/"
+    output_dir = args.output_dir
+
+    if args.use_amulet:
+        model_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + model_dir
+        output_dir = f"{os.environ['AMLT_OUTPUT_DIR']}/" + output_dir
+
+    if args.method == "data_diet":
+        method_details = (
+            args.method
+            + "_"
+            + args.data_diet_examples_ranking
+            + "_"
+            + str(args.data_diet_factual_ratio)
+            + "_"
+            + str(args.data_diet_counterfactual_ratio)
         )
-        all_heads_attention_per_example = torch.cat(
-            (all_heads_attention_per_example, all_heads_attention_batch), 0
-        ).to(device)
+    else:
+        method_details = args.method
+    output_dir = (
+        "./results/arxiv_2/"
+        + method_details
+        + "_"
+        + args.classifier_model
+        + "_"
+        + args.dataset
+        + "_Seed_"
+        + str(my_seed)
+        + "_CDS_ratio_"
+        + str(args.data_substitution_ratio)
+        + "_CDA_ratio_"
+        + str(args.data_augmentation_ratio)
+        + "_"
+        + args.CDA_examples_ranking
+        + "/"
+        + output_dir
+    )
 
-    return all_heads_attention_per_example
+    Path(model_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+    # Train/Load the biased model using cross-entropy
+    biased_model = train_biased_classifier(
+        args.dataset,
+        args.CDA_examples_ranking,
+        args.data_augmentation_ratio,
+        args.data_diet_examples_ranking,
+        args.data_diet_factual_ratio,
+        args.data_diet_counterfactual_ratio,
+        args.data_substitution_ratio,
+        args.max_length,
+        args.classifier_model,
+        args.batch_size_biased_model,
+        model_dir,
+        args.use_amulet,
+        args.num_epochs_biased_model,
+        args.learning_rate,
+        my_seed,
+    )
 
-def compute_confidence_and_variability(
-    batch_size_biased_model,
-    classifier_model,
-    output_dir,
-    model_dir,
-    use_amulet,
-    batch_size_debiased_model,
-    num_epochs_biased_model,
-    num_epochs_confidence_variability,
-    train_dataset,
-    val_dataset,
-):
-    """
-    Compute the confidence and variability in the model before debiasing as in https://arxiv.org/pdf/2009.10795.pdf as follows:
-    1) The model is trained for multple epochs, and after each epoch it is used to give predictions for a specific dataset (it could be training or validation).
-    2) The examples in the dataset are categorized into "easy-to-learn", "hard-to-learn" and "ambiguous" based on the mean and standard deviation in the predictions of the ground truth labels.
-    3) "easy-to-learn" examples are those that the model predicts correctly over multiple epochs, with low variability. "hard-to-learn" examples are those that the model incorrectly predicts with low variability, and "ambiguous" examples are those with high variability in the prediction.
-    arguments that need explanation:
-        num_epochs_confidence_variability: the number of epochs that we consider while computing confidence and variability
-    returns:
-        the function returns:
-        confidence: the mean of the predictions that the model gives to the ground truth label, over multiple epochs.
-        variability: the standard deviation of the predictions that the model gives to the ground truth label, over multiple epochs.
-    """
-    # Save the model weights after each epoch
-    checkpoint_steps = int(train_dataset.__len__() / batch_size_biased_model)
+    # save the best biased model
+    torch.save(
+        biased_model.state_dict(),
+        model_dir
+        + "/"
+        + args.classifier_model
+        + "_"
+        + args.dataset
+        + "_"
+        + args.method
+        + "_"
+        + args.data_diet_examples_ranking
+        + "_"
+        + str(args.data_augmentation_ratio)
+        + "_"
+        + str(args.data_diet_factual_ratio)
+        + "_"
+        + str(args.data_diet_counterfactual_ratio)
+        + "_biased_best.pt",
+    )
 
-    if classifier_model in [
+    if args.classifier_model in [
         "bert-base-cased",
         "bert-large-cased",
         "distilbert-base-cased",
@@ -151,264 +351,137 @@ def compute_confidence_and_variability(
         "distilbert-base-uncased",
     ]:
         huggingface_model = BertForSequenceClassification
-    elif classifier_model in ["roberta-base", "distilroberta-base"]:
+    elif args.classifier_model in ["roberta-base", "distilroberta-base"]:
         huggingface_model = RobertaForSequenceClassification
 
-    prediction_epoch = []
+    # Load the dataset
+    train_dataset, val_dataset, test_dataset = data_loader(
+        my_seed,
+        args.dataset,
+        args.CDA_examples_ranking,
+        args.data_augmentation_ratio,
+        args.data_diet_examples_ranking,
+        args.data_diet_factual_ratio,
+        args.data_diet_counterfactual_ratio,
+        args.data_substitution_ratio,
+        args.max_length,
+        args.classifier_model,
+        apply_data_augmentation=(args.method == "data_augmentation"),
+        apply_data_substitution=(args.method == "data_substitution"),
+        apply_blindness=(args.method == "blindness"),
+        apply_data_diet=(args.method == "data_diet"),
+        apply_data_balancing=(args.method == "data_balancing"),
+    )
 
-    for k in range(num_epochs_confidence_variability):
-        # Check if the model already exists
-        model_checkpoint_path = (
-            model_dir + "/checkpoint-" + str(checkpoint_steps * (k + 1))
+    # Define pretrained tokenizer and model
+    model = huggingface_model.from_pretrained(
+        "./saved_models/cached_models/" + model_name,
+        num_labels=len(set(train_dataset.labels)),
+    )
+
+    model = model.to(device)
+
+    # The number of epochs after which we save the model.
+    if args.compute_importance_scores:
+        # The number of epochs that we consider to compute our fairness score could be less than one to get capture the state of the model in the very early stages of trianing. We save the checkpoint to use them while computing the scores.
+        checkpoint_steps = int(
+            train_dataset.__len__()
+            / args.batch_size_biased_model
+            * args.num_epochs_importance_score
         )
-        if os.path.isdir(model_checkpoint_path):
-            model_before_debiasing = huggingface_model.from_pretrained(
-                model_checkpoint_path, num_labels=len(set(val_dataset.labels))
-            ).to(device)
+    else:
+        # If we are not computing the scores, we can just save the checkpoint after each epoch
+        checkpoint_steps = int(train_dataset.__len__() / args.batch_size_biased_model)
 
-            number_of_labels = len(set(val_dataset.labels))
-            prediction_before_debiasing = torch.ones([0, number_of_labels]).to(device)
+    # We now train the debiased model
 
-            # Save the predictions after each epoch (based on the paper https://arxiv.org/pdf/2009.10795.pdf)
-            for i in range(int(np.ceil(len(val_dataset) / batch_size_debiased_model))):
-                with torch.no_grad():
-                    prediction = model_before_debiasing.forward(
-                        input_ids=torch.tensor(
-                            val_dataset.encodings["input_ids"][
-                                i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
-                            ]
-                        ).to(device),
-                        attention_mask=torch.tensor(
-                            val_dataset.encodings["attention_mask"][
-                                i * batch_size_debiased_model : (i + 1) * batch_size_debiased_model
-                            ]
-                        ).to(device),
-                    )["logits"]
-
-                predictions_batch = softmax(
-                    torch.cat(
-                        [
-                            torch.unsqueeze(prediction[j], dim=0)
-                            for j in range(len(prediction))
-                        ]
-                    )
-                ).to(device)
-                prediction_before_debiasing = torch.cat(
-                    (prediction_before_debiasing, predictions_batch), 0
-                ).to(device)
-
-            prediction_epoch.append(prediction_before_debiasing)
-
-    ground_truth_labels = torch.tensor(val_dataset.labels).to(device)
-
-    prediction_all = torch.cat(
-        [
-            torch.unsqueeze(prediction_epoch[i], dim=0)
-            for i in range(len(prediction_epoch))
-        ]
-    )
-    prediction_mean = torch.mean(prediction_all, dim=0).to(device)
-    prediction_deviation = torch.std(prediction_all, dim=0).to(device)
-
-    confidence = torch.tensor(
-        [
-            prediction_mean[i, int(ground_truth_labels[i])]
-            for i in range(ground_truth_labels.shape[0])
-        ]
-    ).to(device)
-    variability = torch.tensor(
-        [
-            prediction_deviation[i, int(ground_truth_labels[i])]
-            for i in range(ground_truth_labels.shape[0])
-        ]
-    ).to(device)
-
-    return (
-        confidence,
-        variability,
+    # Define Trainer parameters
+    classifier_args = TrainingArguments(
+        output_dir=model_dir,
+        evaluation_strategy="steps",
+        eval_steps=checkpoint_steps,
+        save_steps=checkpoint_steps,
+        per_device_train_batch_size=args.batch_size_debiased_model,
+        per_device_eval_batch_size=args.batch_size_debiased_model,
+        num_train_epochs=args.num_epochs_debiased_model,
+        learning_rate=args.learning_rate,
+        seed=my_seed,
+        load_best_model_at_end=True,
     )
 
-
-def log_topk_attention_tokens(
-    batch_size_debiased_model,
-    num_tokens_logged,
-    data,
-    model_before_debiasing,
-    model_after_debiasing,
-    dataset,
-    tokenizer,
-):
-    """
-    Log the top k tokens to which the classification token (CLS) attends
-    returns:
-        the function doesnt return anything, since the top k tokens are added to the csv file.
-    """
-    # Compute the attention weights in the last layer of the biased model
-    top_attention_tokens_biased = []
-    top_attention_tokens_weights_biased = []
-    gender_tokens_biased = []
-    ids = dataset[:]["input_ids"].to(device)
-
-    all_heads_attention_before_debiasing = average_attention_map_all_heads(
-        dataset, model_before_debiasing, batch_size_debiased_model
+    # Define Trainer
+    trainer = Trainer(
+        model=model,
+        args=classifier_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
     )
 
-    # ===================================================#
+    # Train the model
+    trainer.train()
 
-    # Log the top k tokens that the classification token attends to in the last
-    # layer of the biased and de-biased models for all the heads combined
-    top_attention_tokens_debiased = []
-    top_attention_tokens_weights_debiased = []
-    gender_tokens_debiased = []
-
-    all_heads_attention_after_debiasing = average_attention_map_all_heads(
-        dataset, model_after_debiasing, batch_size_debiased_model
+    torch.save(
+        model.state_dict(),
+        model_dir
+        + args.classifier_model
+        + "_"
+        + args.dataset
+        + "_"
+        + args.method
+        + "_"
+        + args.data_diet_examples_ranking
+        + "_"
+        + str(args.data_augmentation_ratio)
+        + "_"
+        + str(args.data_diet_factual_ratio)
+        + "_"
+        + str(args.data_diet_counterfactual_ratio)
+        + "_debiased_best.pt",
     )
 
-    # We look for 3 things:
-    # 1- The top k tokens to which the CLS tokens attends.
-    # 2- The values of their attention weights.
-    # 3- Whether or not they refer to gender tokens.
-    # This is done over all the layers and heads in the model and only for the top k tokens.
-    # At the end, for every example, we have 2 values: The sum of the attention weights
-    # over the top k tokens for gender words and for nongender words. We compare the distribution
-    # of both values in both the biased and debiased models.
-    top_attention_tokens_biased.append(
-        [
-            [
-                tokenizer.convert_ids_to_tokens(ids[j])[i]
-                for i in torch.topk(
-                    all_heads_attention_before_debiasing[j][0],
-                    num_tokens_logged,
-                )[1]
-            ]
-            for j in range(len(dataset))
-        ]
+    assess_performance_and_bias(
+        my_seed,
+        model,
+        args.dataset,
+        args.CDA_examples_ranking,
+        args.data_augmentation_ratio,
+        args.data_diet_examples_ranking,
+        args.data_diet_factual_ratio,
+        args.data_diet_counterfactual_ratio,
+        args.data_substitution_ratio,
+        args.max_length,
+        args.classifier_model,
+        output_dir,
+        model_dir,
+        args.use_amulet,
+        args.method,
+        args.batch_size_biased_model,
+        args.batch_size_debiased_model,
+        args.use_wandb,
     )
-
-    gender_tokens_biased.append(
-        [
-            [
-                tokenizer.convert_ids_to_tokens(ids[j])[i]
-                != gender_bend(tokenizer.convert_ids_to_tokens(ids[j])[i])
-                for i in torch.topk(
-                    all_heads_attention_before_debiasing[j][0],
-                    num_tokens_logged,
-                )[1]
-            ]
-            for j in range(len(dataset))
-        ]
-    )
-
-    top_attention_tokens_weights_biased.append(
-        [
-            [
-                i
-                for i in torch.topk(
-                    all_heads_attention_before_debiasing[j][0],
-                    num_tokens_logged,
-                )[0]
-            ]
-            for j in range(len(dataset))
-        ]
-    )
-
-    attention_weights_gender_tokens_biased = torch.sum(
-        torch.mul(
-            torch.tensor(top_attention_tokens_weights_biased[0]),
-            torch.tensor(gender_tokens_biased[0]),
-        ),
-        dim=1,
-    )
-    attention_weights_nongender_tokens_biased = torch.sum(
-        torch.mul(
-            torch.tensor(top_attention_tokens_weights_biased[0]),
-            ~torch.tensor(gender_tokens_biased[0]),
-        ),
-        dim=1,
-    )
-
-    top_attention_tokens_debiased.append(
-        [
-            [
-                tokenizer.convert_ids_to_tokens(ids[j])[i]
-                for i in torch.topk(
-                    all_heads_attention_after_debiasing[j][0],
-                    num_tokens_logged,
-                )[1]
-            ]
-            for j in range(len(dataset))
-        ]
-    )
-
-    gender_tokens_debiased.append(
-        [
-            [
-                tokenizer.convert_ids_to_tokens(ids[j])[i]
-                != gender_bend(tokenizer.convert_ids_to_tokens(ids[j])[i])
-                for i in torch.topk(
-                    all_heads_attention_after_debiasing[j][0],
-                    num_tokens_logged,
-                )[1]
-            ]
-            for j in range(len(dataset))
-        ]
-    )
-
-    top_attention_tokens_weights_debiased.append(
-        [
-            [
-                i
-                for i in torch.topk(
-                    all_heads_attention_after_debiasing[j][0],
-                    num_tokens_logged,
-                )[0]
-            ]
-            for j in range(len(dataset))
-        ]
-    )
-
-    attention_weights_gender_tokens_debiased = torch.sum(
-        torch.mul(
-            torch.tensor(top_attention_tokens_weights_debiased[0]),
-            torch.tensor(gender_tokens_debiased[0]),
-        ),
-        dim=1,
-    )
-    attention_weights_nongender_tokens_debiased = torch.sum(
-        torch.mul(
-            torch.tensor(top_attention_tokens_weights_debiased[0]),
-            ~torch.tensor(gender_tokens_debiased[0]),
-        ),
-        dim=1,
-    )
-
-    data["top attention tokens biased " + "all heads"] = top_attention_tokens_biased[0]
-    data[
-        "top attention tokens de-biased_" + "all_heads"
-    ] = top_attention_tokens_debiased[0]
-
-    data["gender words in top k tokens biased model"] = detect_gender_words(
-        top_attention_tokens_biased
-    )
-    data["gender words in top k tokens de-biased model"] = detect_gender_words(
-        top_attention_tokens_debiased
-    )
-
-    data[
-        "Average attention weights for gender tokens biased model"
-    ] = (
-        attention_weights_gender_tokens_biased.cpu().numpy()
-    )  # This is only over the top k tokens
-    data[
-        "Average attention weights for non-gender tokens biased model"
-    ] = attention_weights_nongender_tokens_biased.cpu().numpy()
-
-    data[
-        "Average attention weights for gender tokens debiased model"
-    ] = attention_weights_gender_tokens_debiased.cpu().numpy()
-    data[
-        "Average attention weights for non-gender tokens debiased model"
-    ] = attention_weights_nongender_tokens_debiased.cpu().numpy()
-
-    return data
+    if args.analyze_results:
+        analyze_results(
+            my_seed,
+            args.dataset,
+            args.CDA_examples_ranking,
+            args.data_augmentation_ratio,
+            args.data_diet_examples_ranking,
+            args.data_diet_factual_ratio,
+            args.data_diet_counterfactual_ratio,
+            args.data_substitution_ratio,
+            args.max_length,
+            args.classifier_model,
+            args.compute_importance_scores,
+            args.num_epochs_biased_model,
+            args.batch_size_biased_model,
+            output_dir,
+            model_dir,
+            args.batch_size_debiased_model,
+            args.analyze_attention,
+            args.use_amulet,
+            args.num_epochs_importance_score,
+            args.num_epochs_confidence_variability,
+            args.num_tokens_logged,
+            args.method,
+        )
