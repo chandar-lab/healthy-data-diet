@@ -1,15 +1,17 @@
-# reducing-gender-bias-using-auxiliary-loss
-Reduce gender bias in machine learning models using an auxiliary loss.
-
-## What is it?
-We introduce a method that reduces the bias in classifiers using an auxiliary loss term. The method uses classifiers from 🤗 Hugging Face ([link](https://github.com/huggingface/transformers)). 
+# healthy-data-diet
+Mitigating gender bias in text classification models by removing the stereotypical examples. We use the classifiers from 🤗 Hugging Face ([link](https://github.com/huggingface/transformers)). 
 
 ## How it works
-Reducing the bias in classifiers using policy gradient can be summarized as follows:
+Healthy data diet can be summarized as follows:
 
-1. **Training a vanilla classifier**: Train a classifier on a certain task (currently we have tested the algorithm on sexism and toxicity detection, but it should work on any other NLP classification task).
-2. **Fine-tuning**: Starting with the pre-trained model, we fine-tune the weights using our auxiliary loss term. 
-3. **Evaluation metrics**: To prove the efficacy of our approach, we use already existing metrics to measure the bias before and after applying policy gradient algorithm. The metrics used are: false negative equality difference (FNED) and false positive equality difference (FPED).
+1. **Generating the counterfactual examples**:
+2. **Finding the important examples for fairness using the GE score**: 
+3. **Adding a pruned version of the original dataset to the important counterfactual examples**: 
+
+<div style="text-align: center">
+<img src="images/Healthy_diet_recipe.pdf" width="800">
+<p style="text-align: center;"> <b>Figure:</b> The pipeline used in of the policy gradient approach. </p>
+</div>
 
 ## Installation
 
