@@ -24,7 +24,7 @@ Clone the repository, then install the required packages as follows:
 
 ## Running the experiments
 
-**Computing the scores:**
+**Computing the scores**
 The following command is used to
 compute the GE scores for the Twitter dataset using a BERT
 model and a seed of 1 when the state of early training is set
@@ -34,7 +34,7 @@ to 1 epoch:
 
 
 **Experiment 1: Verifying that GE score reflects the
-importance of counterfactual examples:**
+importance of counterfactual examples**
 The following command is used to do debiasing using data augmentation
 for the Twitter dataset using a RoBERTa model and a seed of
 3 using 75% of the counterfactual examples that are ranked
@@ -42,7 +42,7 @@ according to the EL2N score:
 
 `python main.py --dataset Twitter --classifier_model roberta-base --seed 3 --data_augmentation_ratio 0.75 --CDA_examples_ranking EL2N --batch_size_biased_model 64 --num_epochs_biased_model 15 --batch_size_debiased_model 64 --method data_augmentation --num_epochs_debiased_model 15 --analyze_results True`
 
-**Experiment 2: Finding the best trade-off between fairness and performance:**
+**Experiment 2: Finding the best trade-off between fairness and performance**
 The following command is used
 to do debiasing with 30% of the factual examples and 20%
 of the counterfactual examples using the proposed healthy
