@@ -1,0 +1,10 @@
+pytorch-pretrained-bert
+transformers
+wandb
+torch
+sklearn
+pandas
+numpy
+matplotlib
+seaborn
+scipy
