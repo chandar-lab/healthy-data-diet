@@ -240,7 +240,7 @@ if __name__ == "__main__":
     args = parse_args()
     assert args.data_diet_counterfactual_ratio != 0 or args.data_diet_factual_ratio != 0
     # We cannot have both the data_diet_factual_ratio and data_diet_counterfactual_ratio be zero, because this means there is no training data.
-    with zipfile.ZipFile("./bias_dataset_arxiv.zip", "r") as zip_ref:
+    with zipfile.ZipFile("./bias_datasets_AAAI23.zip", "r") as zip_ref:
         zip_ref.extractall("./data")
 
     if args.use_wandb:
