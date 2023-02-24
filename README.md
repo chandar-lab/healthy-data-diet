@@ -52,7 +52,7 @@ and a seed of 5:
 `python main.py --batch_size_biased_model 32 --seed 5 --num_epochs_biased_model 10 --dataset Jigsaw --batch_size_debiased_model 32 --method data_diet --num_epochs_debiased_model 10 --classifier_model roberta-base --max_length 40 --analyze_results True --data_diet_factual_ratio 0.3 --data_diet_counterfactual_ratio 0.2 --data_diet_examples_ranking healthy_random`
 
 ## Citation
-
+```
 @article{zayed2022deep,
   title={Deep Learning on a Healthy Data Diet: Finding Important Examples for Fairness},
   author={Zayed, Abdelrahman and Parthasarathi, Prasanna and Mordido, Goncalo and Palangi, Hamid and Shabanian, Samira and Chandar, Sarath},
