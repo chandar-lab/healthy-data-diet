@@ -1,4 +1,4 @@
-# healthy-data-diet
+# Deep Learning on a Healthy Data Diet: Finding Important Examples for Fairness (AAAI 2023)
 Mitigating gender bias in text classification models by removing the stereotypical examples ([paper](https://arxiv.org/pdf/2211.11109.pdf)). We use the classifiers from 🤗 Hugging Face ([link](https://github.com/huggingface/transformers)). 
 
 
