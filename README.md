@@ -15,8 +15,6 @@ Healthy data diet can be summarized as follows:
 <p style="text-align: center;"> </p>
 </div>
 
-`pip install -r requirements.txt`
-
 ## Running the experiments
 
 Follow the instructions in the `healthy_data_diet_AAAI23.ipynb` file to run the experiments in the paper.
