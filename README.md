@@ -20,7 +20,7 @@ Healthy data diet can be summarized as follows:
 ### Python package
 Clone the repository, then install the required packages as follows:
 
-`pip -r install requirements.txt`
+`pip install -r requirements.txt`
 
 ## Running the experiments
 
